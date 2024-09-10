@@ -1,44 +1,7 @@
-#!/usr/bin/env python
-# -*- encoding: utf-8 -*-
-'''
-@File    : raid6.py
-@Time    : 2024/09/090
-@Author  : Yang Shen
-@Contact : 030sy030@gmail.com
-@Version : 0.1
-@License : TOADD
-@Desc    : NONE
-'''
-
-
 import numpy as np
 from copy import deepcopy
-from dataclasses import dataclass, field
 from galois_field import GaloisField
-
-# Define a class to simulate each disk in the RAID6 system
-class Disk:
-    def __init__(self, size: int):
-        self.size = size
-        self._data = bytearray(size)
-    
-    def read(self, offset: int, size: int):
-        return self._data[offset:offset+size]
-    
-    def write(self, offset: int, data: bytearray):
-        self._data[offset:offset + len(data)] = data
-
-
-@dataclass
-class RAID6Config:
-    '''
-    Configuration class for RAID6 system.
-    '''
-    data_disks: int = field(default=4, metadata={"description": "Number of data disks"})
-    parity_disks: int = field(default=2, metadata={"description": "Number of parity disks"})
-    block_size: int = field(default=1024 * 1024, metadata={"description": "Block size in bytes"})
-    disk_size: int = field(default=1024*1024*1024, metadata={"description": "Disk size in bytes"})
-    stripe_width: int = field(default=6, metadata={"description": "Number of disks in a stripe"})
+from utils import Disk, RAID6Config
 
 
 class RAID6(object):
@@ -61,20 +24,20 @@ class RAID6(object):
     def __init__(self, config: RAID6Config):
         self.data_disks = config.data_disks
         self.parity_disks = config.parity_disks
-        assert self.parity_disks == 2, "RAID6 requires 2 parity disks"
+        self.stripe_width = config.stripe_width
         self.block_size = config.block_size
         self.disk_size = config.disk_size
-        self.stripe_width = config.stripe_width
-        assert self.stripe_width == self.data_disks + self.parity_disks, "Invalid RAID6 configuration"
         self.stripe_size = self.block_size * self.data_disks
-        self.galois_field = GaloisField()
-        self.disks = [Disk(self.disk_size) for _ in range(self.stripe_width)]
+        
+        self.disks = [Disk(self.disk_size, id=_) for _ in range(self.stripe_width)]
         self.table = None
         self._parity_PQ_idx = [self.data_disks, self.data_disks + 1]
-        self._padding_sizes = []
         self._parity_PQ_idxs = []
+        self._padding_sizes = []
 
-    def update_table(self):
+        self.galois_field = GaloisField()
+
+    def _update_table(self):
         '''
         Called when a stripe is written to the RAID6 system. The table is updated to record the block type.
         '''
@@ -95,6 +58,61 @@ class RAID6(object):
             _parity_idx = self._parity_PQ_idx[idx]
             self._parity_PQ_idx[idx] = _parity_idx + 1 if _parity_idx + 1 < self.stripe_width \
                 else _parity_idx + 1 - self.stripe_width
+
+    def _num_stripes(self):
+        '''
+        Get the number of stripes in the RAID6 system.
+        '''
+        if self.table is None:
+            return 0
+        return len(self.table)
+    
+    def _distribute_stripe(self, stripe_data: bytearray):
+        '''
+        Distribute a stripe of data to the RAID6 system.
+        '''
+        pid, qid = self._parity_PQ_idx
+        self._update_table()
+
+        # Compute the padding size and zero pad the stripe data if it is not a full stripe
+        padding_size = self.stripe_size - len(stripe_data)
+        stripe_data += bytearray(self.stripe_size - len(stripe_data))
+        self._padding_sizes.append(padding_size)
+        
+        # split the stripe data into data blocks
+        data_blocks = [stripe_data[i : i+self.block_size] for i in range(0, len(stripe_data), self.block_size)]
+        assert len(data_blocks[-1]) == self.block_size, "Invalid block size"
+
+        # Calculate the parity blocks, initialize with zeros
+        parity_P = bytearray(self.block_size)
+        parity_Q = bytearray(self.block_size)
+        for idx, block in enumerate(data_blocks):
+            parity_P = bytearray([self.galois_field.add(parity_P[i], block[i]) for i in range(self.block_size)])
+            parity_Q = bytearray([self.galois_field.add(parity_Q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], block[i])) for i in range(self.block_size)])
+
+        # Write the data and parity blocks to the disks, in the last stripe
+        self.disk_start = (self._num_stripes() - 1) * self.block_size
+        for idx, block_type in enumerate(self.table[-1]):
+            if block_type == 0:
+                self.disks[idx].write(self.disk_start, data_blocks.pop(0))
+
+        self.disks[pid].write(self.disk_start, parity_P)
+        self.disks[qid].write(self.disk_start, parity_Q)
+
+    def _distribute_data(self, data: bytearray):
+        '''
+        Distribute data to the RAID6 system.
+        '''
+        # [SYM][To do] how to handle the small data.
+        # [SYM][To do] how to track different data and realize the data update.
+        data_size = len(data)
+        stripe_count = (data_size + self.stripe_size - 1) // self.stripe_size
+
+        for i in range(stripe_count):
+            start = i * self.stripe_size
+            end = min((i + 1) * self.stripe_size, data_size)
+            stripe_data = data[start:end]
+            self._distribute_stripe(stripe_data)
 
     def display_table(self):
         '''
@@ -119,73 +137,14 @@ class RAID6(object):
                 print()
                 print(table_border)
 
-    def _num_stripes(self):
+    def save_data(self, data_path: str):
         '''
-        Get the number of stripes in the RAID6 system.
+        Save Data to the RAID6 system.
         '''
-        if self.table is None:
-            return 0
-        return len(self.table)
-
-    def read_data(self, file_path: str):
-        '''
-        Read data from a file and write to the RAID6 system.
-        '''
-        with open(file_path, "rb") as f:
+        with open(data_path, "rb") as f:
             data = f.read()
-        return data
-    
-    def distribute_data(self, data: bytearray):
-        '''
-        Distribute data to the RAID6 system.
-        '''
-        data_size = len(data)
-        stripe_count = data_size // self.stripe_size
-        if data_size % self.stripe_size != 0:
-            stripe_count += 1
-
-        for i in range(stripe_count):
-            start = i * self.stripe_size
-            end = min((i + 1) * self.stripe_size, data_size)
-            stripe_data = data[start:end]
-            self._distribute_stripe(stripe_data)
-            # padding_size = self._distribute_stripe(stripe_data)
-            # self._padding_sizes.append(padding_size)
-        self.display_table()
-
-    def _distribute_stripe(self, stripe_data: bytearray):
-        '''
-        Distribute a stripe of data to the RAID6 system.
-        '''
-        pid, qid = self._parity_PQ_idx
-        self.update_table()
-
-        # Compute the padding size and zero pad the stripe data if it is not a full stripe
-        padding_size = self.stripe_size - len(stripe_data)
-        stripe_data += bytearray(self.stripe_size - len(stripe_data))
-        self._padding_sizes.append(padding_size)
-        
-        # split the stripe data into data blocks
-        data_blocks = [stripe_data[i:i+self.block_size] for i in range(0, len(stripe_data), self.block_size)]
-        assert len(data_blocks[-1]) == self.block_size, "Invalid block size"
-
-        # Calculate the parity blocks
-        parity_P = bytearray(self.block_size)
-        parity_Q = bytearray(self.block_size)
-        for block in data_blocks:
-            parity_P = bytearray([self.galois_field.add(parity_P[i], block[i]) for i in range(self.block_size)])
-            parity_Q = bytearray([self.galois_field.add(parity_Q[i], self.galois_field.multiply(self.galois_field.exp[1], block[i])) for i in range(self.block_size)])
-
-        # Write the data and parity blocks to the disks, in the last stripe
-        self.disk_start = (self._num_stripes() - 1) * self.block_size
-        for idx, block_type in enumerate(self.table[-1]):
-            if block_type == 0:
-                self.disks[idx].write(self.disk_start, data_blocks.pop(0))
-                
-        self.disks[pid].write(self.disk_start, parity_P)
-        self.disks[qid].write(self.disk_start, parity_Q)
-
-        return padding_size
+        self._distribute_data(data)
+        print(f"Data saved to RAID6 system successfully!")
     
     def verify_stripe(self, stripe_idx: int):
         '''
@@ -205,9 +164,9 @@ class RAID6(object):
 
         recompute_parity_P = bytearray(self.block_size)
         recompute_parity_Q = bytearray(self.block_size)
-        for block in data_blocks:
+        for idx, block in enumerate(data_blocks):
             recompute_parity_P = bytearray([self.galois_field.add(recompute_parity_P[i], block[i]) for i in range(self.block_size)])
-            recompute_parity_Q = bytearray([self.galois_field.add(recompute_parity_Q[i], self.galois_field.multiply(self.galois_field.exp[1], block[i])) for i in range(self.block_size)])
+            recompute_parity_Q = bytearray([self.galois_field.add(recompute_parity_Q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], block[i])) for i in range(self.block_size)])
         
         return recompute_parity_P == parity_P, recompute_parity_Q == parity_Q
         
@@ -242,19 +201,17 @@ class RAID6(object):
 # Example usage
 if __name__ == "__main__":
     config = RAID6Config()
-    config.block_size = 1024 * 1024
     print(config)
     raid6 = RAID6(config)
+    raid6.display_table()
 
-    fp = "data/sample.png"
+    fp = "../data/sample.png"
     # fp = "data/sample.jpg"
-    data = raid6.read_data(fp)
+    raid6.save_data(fp)
+    raid6.display_table()
 
-    raid6.display_table()
-    raid6.distribute_data(data)
-    print(raid6.table)
-    raid6.load_data("data/sample_out.png", verify=True)
-    print(raid6._parity_PQ_idxs)
-    print(raid6._padding_sizes)
-    raid6.display_table()
-    breakpoint()
+    raid6.load_data("../data/sample_out.png", verify=True)
+    # print(raid6._parity_PQ_idxs)
+    # print(raid6._padding_sizes)
+    # raid6.display_table()
+    # breakpoint()
