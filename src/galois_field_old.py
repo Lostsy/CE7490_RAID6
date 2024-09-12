@@ -43,4 +43,6 @@ class GaloisField:
             raise ZeroDivisionError("division by zero")
         # return self.multiply(a, self.inverse(b))
         return self.gfilog[255 + self.gflog[a] - self.gflog[b]] # a / b = x^m / x^n = x^(m - n) = x^(255 + m - n)
-
+    
+    def get_gfilog(self):
+        return self.gfilog

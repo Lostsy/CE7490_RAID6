@@ -1,6 +1,7 @@
 import numpy as np
 from copy import deepcopy
-from galois_field import GaloisField
+# from galois_field_old import GaloisField
+from clib.galois_field import GaloisField, cal_parity
 from utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
@@ -40,7 +41,7 @@ class RAID6(object):
         self.block_size = config.block_size
         self.stripe_num = config.disk_size // self.block_size
         self.stripe_size = self.block_size * self.data_disks
-        self.galois_field = GaloisField()
+        # self.galois_field = GaloisField()
         
         self.disks = [Disk(config.disk_size, id=_) for _ in range(self.stripe_width)]
         self.file2stripe = {} # use to track the file storage location
@@ -146,13 +147,11 @@ class RAID6(object):
         # Update the parity blocks
         p = bytearray(self.block_size)
         q = bytearray(self.block_size)
-        for idx, disk_idx in enumerate(data_disk_idxs):
-            if len(stripe_data) != self.stripe_size:
-                data = self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
-            else:
-                data = stripe_data[idx * self.block_size : (idx + 1) * self.block_size]
-            p = bytearray([self.galois_field.add(p[i], data[i]) for i in range(self.block_size)])
-            q = bytearray([self.galois_field.add(q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], data[i])) for i in range(self.block_size)])
+        if len(stripe_data) != self.stripe_size:
+            stripe_data = bytearray(0)
+            for disk_idx in data_disk_idxs:
+                stripe_data += self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
+        cal_parity(p, q, stripe_data)
 
         # Write back the parity blocks
         self.disks[p_idx].write(stripe_idx * self.block_size, p)
@@ -186,12 +185,12 @@ class RAID6(object):
             if size == self.stripe_size:
                 stripe2data[self.stripe_status.pop()[1]] = data[idx * self.stripe_size : (idx + 1) * self.stripe_size] # pop the last stripe
             else:
-                for idx, stripe in enumerate(self.stripe_status):
+                for idx_sorted, stripe in enumerate(self.stripe_status):
                     if size <= stripe[0]:
                         stripe2data[stripe[1]] = data[idx * self.stripe_size : idx * self.stripe_size + size]
                         break
                 # Update the stripe status
-                stripe = self.stripe_status.pop(idx)
+                stripe = self.stripe_status.pop(idx_sorted)
                 if stripe[0] > size:
                     self.stripe_status.add((stripe[0] - size, stripe[1]))
         
@@ -222,10 +221,11 @@ class RAID6(object):
 
         recompute_p = bytearray(self.block_size)
         recompute_q = bytearray(self.block_size)
-        for idx, disk_dix in enumerate(data_disk_idxs):
-            data = self.disks[disk_dix].read(stripe_idx * self.block_size, self.block_size)
-            recompute_p = bytearray([self.galois_field.add(recompute_p[i], data[i]) for i in range(self.block_size)])
-            recompute_q = bytearray([self.galois_field.add(recompute_q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], data[i])) for i in range(self.block_size)])
+        stripe_data = bytearray(0)
+        for disk_dix in data_disk_idxs:
+            stripe_data += self.disks[disk_dix].read(stripe_idx * self.block_size, self.block_size)
+
+        cal_parity(recompute_p, recompute_q, stripe_data)
         
         if recompute_p == p and recompute_q == q:
             return WrongCode.FULL
@@ -287,6 +287,7 @@ class RAID6(object):
 
         with open(out_path, "wb") as f:
             f.write(data)
+            print(f"Data loaded from RAID6 system successfully")
 
 
 # Example usage
