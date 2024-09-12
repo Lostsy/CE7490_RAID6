@@ -381,8 +381,32 @@ class RAID6(object):
                     continue
                 gf_sum = bytearray([self.galois_field.add(gf_sum[i], self.galois_field.multiply(self.galois_field.gfilog[idx], block[i])) for i in range(self.block_size)])
             # Recover the data blocks
-            # [SY] [TODO] complete the rest of the code
-        pass
+            g = self.galois_field.divide(1, self.galois_field.add(self.galois_field.gfilog[failed[0]], self.galois_field.gfilog[failed[1]]))
+            '''
+            imagePD[i] refer to parity P, imageRS[i] refer to parity Q
+            partialPD refer to xor_sum, partialRS refer to gf_sum
+            3 refer to a failed disk's index
+            xoredPD = gf_add(partialPD, imagePD[i])
+            xoredRS = gf_add(partialRS, imageRS[i])
+            mid = gf_add(gf_mul(gf_drive(3), xoredPD), xoredRS)
+            data = gf_mul(mid, g)
+            '''
+            xor_P = bytearray([self.galois_field.add(xor_sum[i], parity_P[i]) for i in range(self.block_size)])
+            xor_Q = bytearray([self.galois_field.add(gf_sum[i], parity_Q[i]) for i in range(self.block_size)])
+            mid = bytearray([self.galois_field.add(self.galois_field.multiply(self.galois_field.gfilog[failed[0]], xor_P[i]), xor_Q[i]) for i in range(self.block_size)])
+            recovered_data2 = bytearray([self.galois_field.multiply(g, mid[i]) for i in range(self.block_size)])
+            # Sum the rest data blocks and the P parity block to recover the other broken data block
+            recovered_data1 = bytearray()
+            for idx, block in enumerate(data_blocks):
+                if data_blocks_idxs[idx] == failed[1]:
+                    continue
+                recovered_data1 = bytearray([self.galois_field.add(recovered_data1[i], block[i]) for i in range(self.block_size)])
+            recovered_data1 = bytearray([self.galois_field.add(recovered_data1[i], parity_P[i]) for i in range(self.block_size)])
+            # Write the recovered data blocks to the disks
+            self.disks[failed[0]].write(disk_start, recovered_data1)
+            self.disks[failed[1]].write(disk_start, recovered_data2)
+            print(f"Data disks {failed[0]} and {failed[1]} are recovered successfully.")
+        return
 
     def load_stripes(self, stripe_idx: int):
         '''
