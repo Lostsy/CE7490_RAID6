@@ -7,8 +7,9 @@ class Disk:
 
         # create a file to simulate the disk
         self.path = "../disk/disk_" + str(id)
-        with open(self.path, "wb+") as f:
-            print(f"Disk {id} created, size: {size}, path: {self.path}")
+        with open(self.path, "wb") as f:
+            f.write(b"\x00" * size)
+            print(f"Disk {id} size: {size}, path: {self.path}")
     
     def read(self, offset: int, size: int):
         if offset + size > self.size:
@@ -41,3 +42,4 @@ class RAID6Config:
     def __post_init__(self):
         assert self.parity_disks == 2, "RAID6 does not support 2 parity disks"
         assert self.stripe_width == self.data_disks + self.parity_disks, "Invalid RAID6 configuration"
+        assert self.disk_size % self.block_size == 0, "Disk size should be multiple of block size"

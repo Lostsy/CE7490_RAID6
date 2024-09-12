@@ -2,6 +2,18 @@ import numpy as np
 from copy import deepcopy
 from galois_field import GaloisField
 from utils import Disk, RAID6Config
+from sortedcontainers import SortedList
+from enum import Enum
+
+class WrongCode(Enum):
+    FULL = 0
+    DATA = 1
+    PARITY_P = 2
+    PARITY_Q = 3
+    DATA_PARITY_P = 4
+    DATA_PARITY_Q = 5
+    PARITY_P_PARITY_Q = 6
+    DAMAGE = 7
 
 
 class RAID6(object):
@@ -26,192 +38,261 @@ class RAID6(object):
         self.parity_disks = config.parity_disks
         self.stripe_width = config.stripe_width
         self.block_size = config.block_size
-        self.disk_size = config.disk_size
+        self.stripe_num = config.disk_size // self.block_size
         self.stripe_size = self.block_size * self.data_disks
-        
-        self.disks = [Disk(self.disk_size, id=_) for _ in range(self.stripe_width)]
-        self.table = None
-        self._parity_PQ_idx = [self.data_disks, self.data_disks + 1]
-        self._parity_PQ_idxs = []
-        self._padding_sizes = []
-
         self.galois_field = GaloisField()
+        
+        self.disks = [Disk(config.disk_size, id=_) for _ in range(self.stripe_width)]
+        self.file2stripe = {} # use to track the file storage location
+        self.stripe2file = [{0: [None, self.stripe_size]} for _ in range(self.stripe_num)] # use to track the stripe and the file
+        self.stripe_status = SortedList() # use to track the stripe status
+        self.left_size = self.stripe_num * self.stripe_size # use to track the left size of the total raid6 system
 
-    def _update_table(self):
-        '''
-        Called when a stripe is written to the RAID6 system. The table is updated to record the block type.
-        '''
-        # Stripe and Parity are maintained in a table. Table is a 2D array for disk index and block index.
-        # 0 for data, 1 for parity. For the first stripe, the parity is saved in the last two disks.
-        if self.table is None:
-            self.table = np.zeros((1, self.stripe_width), dtype=np.uint8)
-            self.table[-1, self._parity_PQ_idx] = 1
-        else:
-            new_stripe = np.zeros((1, self.stripe_width), dtype=np.uint8)
-            new_stripe[0, self._parity_PQ_idx] = 1
-            self.table = np.vstack((self.table, new_stripe))
-
-        self._parity_PQ_idxs.append(deepcopy(self._parity_PQ_idx))
-
-        # Update the parity disk index
-        for idx in range(self.parity_disks):
-            _parity_idx = self._parity_PQ_idx[idx]
-            self._parity_PQ_idx[idx] = _parity_idx + 1 if _parity_idx + 1 < self.stripe_width \
-                else _parity_idx + 1 - self.stripe_width
-
-    def _num_stripes(self):
-        '''
-        Get the number of stripes in the RAID6 system.
-        '''
-        if self.table is None:
-            return 0
-        return len(self.table)
+        # Init idle stripe status
+        for i in range(self.stripe_num):
+            self.stripe_status.add((self.stripe_size, i)) # ordered list
     
-    def _distribute_stripe(self, stripe_data: bytearray):
+    def _find_parity_PQ_idx(self, stripe_idx: int):
+        '''
+        Find the parity disk index for P and Q.
+        '''
+        base = self.data_disks + stripe_idx
+        return (base % self.stripe_width, (base + 1) % self.stripe_width)
+    
+    def _cal_disk_and_offset(self, stripe_idx: int, offset: int):
+        '''
+        Calculate the disk idx and the offset in the disk.
+        '''
+        if offset > self.stripe_size:
+            raise ValueError("Invalid offset")
+        disk_idx = offset // self.block_size
+        pq_index = self._find_parity_PQ_idx(stripe_idx)
+        data_index = [i for i in range(self.stripe_width) if i not in pq_index]
+        return data_index[disk_idx], offset % self.block_size + stripe_idx * self.block_size
+
+    def _handle_fragment(self, size: int):
+        '''
+        [TODO]
+        Handle the fragment circumstance.
+        '''
+        raise NotImplementedError("Not implemented yet")
+        return {} # return stripe the data spilition mapping
+    
+    def _merge_fragment(self, stripe_idx: int):
+        '''
+        [TODO]
+        Merge the continuous idle fragments.
+        '''
+        raise NotImplementedError("Not implemented yet")
+    
+    def _distribute_stripe(self, stripe_idx: int, stripe_data: bytearray, file_name: str):
         '''
         Distribute a stripe of data to the RAID6 system.
         '''
-        pid, qid = self._parity_PQ_idx
-        self._update_table()
+        # Assume the stripe data is less than the left capacity
+        print(f'data size {len(stripe_data)}')
 
-        # Compute the padding size and zero pad the stripe data if it is not a full stripe
-        padding_size = self.stripe_size - len(stripe_data)
-        stripe_data += bytearray(self.stripe_size - len(stripe_data))
-        self._padding_sizes.append(padding_size)
+        # Find the offset to write the stripe data
+        left_size = len(stripe_data)
+        offset_list = []
+        for offset, info in self.stripe2file[stripe_idx].items():
+            if info[0] is None:
+                self.stripe2file[stripe_idx][offset][0] = file_name
+                if info[1] > left_size:
+                    offset_list.append((offset, left_size))
+                    # update the stripe2file, split the fragment
+                    self.stripe2file[stripe_idx][offset][1] = left_size
+                    self.stripe2file[stripe_idx][offset + left_size] = [None, info[1] - left_size]
+                    left_size = 0
+                    break
+                elif info[1] < left_size:
+                    offset_list.append((offset, info[1]))
+                    left_size -= info[1]
+                else:
+                    offset_list.append((offset, left_size))
+                    left_size = 0
+                    break
+        assert left_size == 0, "Something wrong with the distributed stripe data"
+
+        # Write the stripe data to the disks
+        p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
+        data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+        write_offset = 0
+        for offset, size in offset_list:
+            start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
+            end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
+
+            # Write the data to the disks
+            for disk_idx in range(start_disk_idx, end_disk_idx + 1):
+                if disk_idx == p_idx or disk_idx == q_idx:
+                    continue
+                # Find start offset
+                if disk_idx == start_disk_idx:
+                    disk_offset = start_disk_offset
+                else:
+                    disk_offset = stripe_idx * self.block_size
+
+                # Find write size
+                if disk_idx == end_disk_idx:
+                    write_size = end_disk_offset - disk_offset + 1
+                else:
+                    write_size = self.block_size * (stripe_idx + 1) - disk_offset
+
+                # Write the data
+                self.disks[disk_idx].write(disk_offset, stripe_data[write_offset : write_offset + write_size])
+                write_offset += write_size
+        assert write_offset == len(stripe_data), "Something wrong with writing the distributed stripe data"
         
-        # split the stripe data into data blocks
-        data_blocks = [stripe_data[i : i+self.block_size] for i in range(0, len(stripe_data), self.block_size)]
-        assert len(data_blocks[-1]) == self.block_size, "Invalid block size"
+        # Update the parity blocks
+        p = bytearray(self.block_size)
+        q = bytearray(self.block_size)
+        for idx, disk_idx in enumerate(data_disk_idxs):
+            if len(stripe_data) != self.stripe_size:
+                data = self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
+            else:
+                data = stripe_data[idx * self.block_size : (idx + 1) * self.block_size]
+            p = bytearray([self.galois_field.add(p[i], data[i]) for i in range(self.block_size)])
+            q = bytearray([self.galois_field.add(q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], data[i])) for i in range(self.block_size)])
 
-        # Calculate the parity blocks, initialize with zeros
-        parity_P = bytearray(self.block_size)
-        parity_Q = bytearray(self.block_size)
-        for idx, block in enumerate(data_blocks):
-            parity_P = bytearray([self.galois_field.add(parity_P[i], block[i]) for i in range(self.block_size)])
-            parity_Q = bytearray([self.galois_field.add(parity_Q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], block[i])) for i in range(self.block_size)])
+        # Write back the parity blocks
+        self.disks[p_idx].write(stripe_idx * self.block_size, p)
+        self.disks[q_idx].write(stripe_idx * self.block_size, q)
+        
+        return offset_list
 
-        # Write the data and parity blocks to the disks, in the last stripe
-        self.disk_start = (self._num_stripes() - 1) * self.block_size
-        for idx, block_type in enumerate(self.table[-1]):
-            if block_type == 0:
-                self.disks[idx].write(self.disk_start, data_blocks.pop(0))
-
-        self.disks[pid].write(self.disk_start, parity_P)
-        self.disks[qid].write(self.disk_start, parity_Q)
-
-    def _distribute_data(self, data: bytearray):
+    def _distribute_data(self, data: bytearray, file_name: str):
         '''
         Distribute data to the RAID6 system.
         '''
-        # [SYM][To do] how to handle the small data.
-        # [SYM][To do] how to track different data and realize the data update.
         data_size = len(data)
-        stripe_count = (data_size + self.stripe_size - 1) // self.stripe_size
+        if data_size > self.left_size:
+            raise ValueError("Not enough space in the RAID6 system")
 
-        for i in range(stripe_count):
-            start = i * self.stripe_size
-            end = min((i + 1) * self.stripe_size, data_size)
-            stripe_data = data[start:end]
-            self._distribute_stripe(stripe_data)
+        # Calculate the inital data size allocation for each stripe
+        full_stripe_count = data_size // self.stripe_size
+        stripe_data_size = [self.stripe_size] * full_stripe_count
+        if data_size % self.stripe_size > 0:
+            stripe_data_size.append(data_size % self.stripe_size)
 
-    def display_table(self):
-        '''
-        Display the table of the RAID6 system.
-        '''
-        if self.table is None:
-            print("Table is empty")
-        else:
-            # Print the table in the visualized format
-            TABLE_BORDER_UNIT = "+" + "-" * 8
-            table_border = TABLE_BORDER_UNIT * self.stripe_width + "+"
-            print(table_border.replace("-", "="))
-            print("|", end="")
-            for idx in range(self.stripe_width):
-                print(f" Disk {idx} |", end="")
-            print()
-            print(table_border.replace("-", "="))
-            for row in self.table:
-                print("|", end="")
-                for col in row:
-                    print(f" {'Data  ' if col == 0 else 'Parity'} |", end="")
-                print()
-                print(table_border)
+        # Find the stripes for the data
+        stripe2data = {}
+        for idx, size in enumerate(stripe_data_size):
+            # Handle the fragment circumstance
+            if size > self.stripe_status[-1][0]:
+                stripe2data.update(self._handle_fragment(data_size - idx * self.stripe_size))
+                break
+            
+            # Handle the normal circumstance
+            if size == self.stripe_size:
+                stripe2data[self.stripe_status.pop()[1]] = data[idx * self.stripe_size : (idx + 1) * self.stripe_size] # pop the last stripe
+            else:
+                for idx, stripe in enumerate(self.stripe_status):
+                    if size <= stripe[0]:
+                        stripe2data[stripe[1]] = data[idx * self.stripe_size : idx * self.stripe_size + size]
+                        break
+                # Update the stripe status
+                stripe = self.stripe_status.pop(idx)
+                if stripe[0] > size:
+                    self.stripe_status.add((stripe[0] - size, stripe[1]))
+        
+        # Distribute the data to the stripes
+        for stripe_idx, stripe_data in stripe2data.items():
+            print(f'Distribute stripe {stripe_idx}')
+            stripe2data[stripe_idx] = self._distribute_stripe(stripe_idx, stripe_data, file_name)
+        
+        self.left_size -= data_size
+        return stripe2data
 
-    def save_data(self, data_path: str):
+    def save_data(self, data_path: str, name: str = None):
         '''
         Save Data to the RAID6 system.
         '''
         with open(data_path, "rb") as f:
             data = f.read()
-        self._distribute_data(data)
-        print(f"Data saved to RAID6 system successfully!")
+        
+        self.file2stripe[name] = self._distribute_data(data, name)
+        print(f"Data saved to RAID6 system successfully")
     
     def verify_stripe(self, stripe_idx: int):
         '''
         Verify the integrity of a stripe in the RAID6 system.
         '''
-        if stripe_idx >= self._num_stripes():
-            raise ValueError("Invalid stripe index")
-        stripe = self.table[stripe_idx]
-        data_blocks = []
-        parity_blocks = []
-        for idx, block_type in enumerate(stripe):
-            if block_type == 0:
-                data_blocks.append(self.disks[idx].read(stripe_idx * self.block_size, self.block_size))
-        for idx in self._parity_PQ_idxs[stripe_idx]:
-            parity_blocks.append(self.disks[idx].read(stripe_idx * self.block_size, self.block_size))
-        parity_P, parity_Q = parity_blocks
+        p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
+        data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+        p = self.disks[p_idx].read(stripe_idx * self.block_size, self.block_size)
+        q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
 
-        recompute_parity_P = bytearray(self.block_size)
-        recompute_parity_Q = bytearray(self.block_size)
-        for idx, block in enumerate(data_blocks):
-            recompute_parity_P = bytearray([self.galois_field.add(recompute_parity_P[i], block[i]) for i in range(self.block_size)])
-            recompute_parity_Q = bytearray([self.galois_field.add(recompute_parity_Q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], block[i])) for i in range(self.block_size)])
+        recompute_p = bytearray(self.block_size)
+        recompute_q = bytearray(self.block_size)
+        for idx, disk_dix in enumerate(data_disk_idxs):
+            data = self.disks[disk_dix].read(stripe_idx * self.block_size, self.block_size)
+            recompute_p = bytearray([self.galois_field.add(recompute_p[i], data[i]) for i in range(self.block_size)])
+            recompute_q = bytearray([self.galois_field.add(recompute_q[i], self.galois_field.multiply(self.galois_field.gfilog[idx], data[i])) for i in range(self.block_size)])
         
-        return recompute_parity_P == parity_P, recompute_parity_Q == parity_Q
-        
+        if recompute_p == p and recompute_q == q:
+            return WrongCode.FULL
+        else:
+            return WrongCode.DAMAGE
+    
+    def rebuild_stripe(self, stripe_idx: int, wrong_code: int):
+        '''
+        Rebuild a stripe in the RAID6 system.
+        '''
+        raise NotImplementedError("Not implemented yet")
+        return True
 
-    def load_data(self, out_path: str, verify=False):
+    def load_data(self, name: str, out_path: str, verify=False):
         '''
         Load data from the RAID6 system.
         In a RAID6 system, the data is distributed across multiple disks.
         In order to load the data, we need to read the data from the disks and reconstruct the original data.
         '''
+        stripe2data = self.file2stripe[name]
+        
         data = bytearray()
-        for i in range(self._num_stripes()):
-            stripe = self.table[i]
+        for stripe_idx, offset_list in stripe2data.items():
             if verify:
-                stripe_status = self.verify_stripe(i)
-                if stripe_status[0] and stripe_status[1]:
-                    print(f"Stripe {i} is verified.")
+                stripe_status = self.verify_stripe(stripe_idx)
+                if stripe_status == WrongCode.FULL:
+                    print(f"Stripe {stripe_idx} is verified.")
+                elif stripe_status == WrongCode.DAMAGE:
+                    raise ValueError(f"Stripe {stripe_idx} is corrupted.")
                 else:
-                    print(f"Stripe {i} is corrupted with status P:{stripe_status[0]}, Q:{stripe_status[1]}")
-                    return False
-            data_blocks = []
-            for idx, block_type in enumerate(stripe):
-                if block_type == 0:
-                    data_blocks.append(self.disks[idx].read(i * self.block_size, self.block_size))
-            # consider padding
-            data += b"".join(data_blocks)[:self.stripe_size - self._padding_sizes[i]]
+                    self.rebuild_stripe(stripe_idx, stripe_status)
+
+            for offset, size in offset_list:
+                start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
+                end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
+
+                # Read the data from the disks
+                for disk_idx in range(start_disk_idx, end_disk_idx + 1):
+                    # Find start offset
+                    if disk_idx == start_disk_idx:
+                        disk_offset = start_disk_offset
+                    else:
+                        disk_offset = stripe_idx * self.block_size
+
+                    # Find read size
+                    if disk_idx == end_disk_idx:
+                        read_size = end_disk_offset - disk_offset + 1
+                    else:
+                        read_size = self.block_size * (stripe_idx + 1) - disk_offset
+
+                    data += self.disks[disk_idx].read(disk_offset, read_size)
+
         with open(out_path, "wb") as f:
             f.write(data)
-        return True
 
 
 # Example usage
 if __name__ == "__main__":
+    # Initialize the RAID6 system
     config = RAID6Config()
     print(config)
     raid6 = RAID6(config)
-    raid6.display_table()
 
+    # Save data to the RAID6 system
     fp = "../data/sample.png"
-    # fp = "data/sample.jpg"
-    raid6.save_data(fp)
-    raid6.display_table()
+    raid6.save_data(fp, name="sample.png")
 
-    raid6.load_data("../data/sample_out.png", verify=True)
-    # print(raid6._parity_PQ_idxs)
-    # print(raid6._padding_sizes)
-    # raid6.display_table()
-    # breakpoint()
+    raid6.load_data("sample.png", "../data/sample_out.png", verify=True)
