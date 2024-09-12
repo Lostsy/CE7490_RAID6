@@ -6,7 +6,7 @@ class Disk:
         self.size = size
 
         # create a file to simulate the disk
-        self.path = "../disk/disk_" + str(id)
+        self.path = "./disk/disk_" + str(id)
         with open(self.path, "wb+") as f:
             print(f"Disk {id} created, size: {size}, path: {self.path}")
     
