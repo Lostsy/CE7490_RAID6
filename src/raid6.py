@@ -213,12 +213,10 @@ class RAID6(object):
         self.file2stripe[name] = self._distribute_data(data, name)
         print(f"Data saved to RAID6 system successfully")
     
-    def verify_stripe(self, stripe_idx: int):
+    def verify_stripe(self, stripe_idx: int, p_idx: int, q_idx: int, data_disk_idxs: list):
         '''
         Verify the integrity of a stripe in the RAID6 system.
         '''
-        p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
-        data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
         p = self.disks[p_idx].read(stripe_idx * self.block_size, self.block_size)
         q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
 
@@ -251,8 +249,11 @@ class RAID6(object):
         
         data = bytearray()
         for stripe_idx, offset_list in stripe2data.items():
+            p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
+            data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+
             if verify:
-                stripe_status = self.verify_stripe(stripe_idx)
+                stripe_status = self.verify_stripe(stripe_idx, p_idx, q_idx, data_disk_idxs)
                 if stripe_status == WrongCode.FULL:
                     print(f"Stripe {stripe_idx} is verified.")
                 elif stripe_status == WrongCode.DAMAGE:
@@ -261,11 +262,15 @@ class RAID6(object):
                     self.rebuild_stripe(stripe_idx, stripe_status)
 
             for offset, size in offset_list:
+                print(f'Load stripe {stripe_idx} offset {offset} size {size}')
                 start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
                 end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
 
                 # Read the data from the disks
                 for disk_idx in range(start_disk_idx, end_disk_idx + 1):
+                    if disk_idx == p_idx or disk_idx == q_idx:
+                        continue
+
                     # Find start offset
                     if disk_idx == start_disk_idx:
                         disk_offset = start_disk_offset
