@@ -6,15 +6,23 @@ from utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
 
-class WrongCode(Enum):
-    FULL = 0
-    DATA = 1
-    PARITY_P = 2
-    PARITY_Q = 3
-    DATA_PARITY_P = 4
-    DATA_PARITY_Q = 5
-    PARITY_P_PARITY_Q = 6
-    DAMAGE = 7
+# only use to check parity
+# cannot detect disk failure
+class ParityCode(Enum):
+    ACCURATE = 0
+    WRONG = 1
+
+# related to the disk failure
+class FailCode(Enum):
+    Data = 0
+    Parity_P = 1
+    Parity_Q = 2
+    Data_P = 3
+    Data_Q = 4
+    DATA_DATA = 5
+    PARITY_PARITY = 6
+    CORUCPTED = 7
+    GOOD = 8
 
 
 class RAID6(object):
@@ -48,6 +56,7 @@ class RAID6(object):
         self.stripe2file = [{0: [None, self.stripe_size]} for _ in range(self.stripe_num)] # use to track the stripe and the file
         self.stripe_status = SortedList() # use to track the stripe status
         self.left_size = self.stripe_num * self.stripe_size # use to track the left size of the total raid6 system
+        self.status = [[True for _ in range(self.stripe_width)] for _ in range(self.stripe_num)] # use to track the disk status
 
         # Init idle stripe status
         for i in range(self.stripe_num):
@@ -218,16 +227,9 @@ class RAID6(object):
         q = None
 
         for idx, disk_idx in enumerate(data_disk_idxs):
-            if self.disks[disk_idx].status == False:
-                print(f"Disk {disk_idx} is damaged")
+            if self.status[stripe_idx][disk_idx] == False:
                 continue
-
             now_data = self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
-            if self.disks[disk_idx].status == False:
-                print(f"Disk {disk_idx} is damaged")
-                continue
-            
-            # Successfully read the data from the disk
             stripe_data += now_data
             new_data_idxs.append(idx)
         
@@ -236,6 +238,44 @@ class RAID6(object):
             q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
 
         return p, q, stripe_data, new_data_idxs
+    
+    def _detect_stripe_failcode(self, stripe_idx: int):
+        '''
+        Now we only consider the whole disks.
+        '''
+        (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+
+        failed_data = []
+        p_status = 0
+        q_status = 0
+
+        for disk_idx in data_disk_idxs:
+            if self.status[stripe_idx][disk_idx] == False:
+                failed_data.append(disk_idx)
+        if self.status[stripe_idx][p_idx] == False:
+            p_status = 1
+        if self.status[stripe_idx][q_idx] == False:
+            q_status = 1
+        
+        # return the fail code & the failed idx
+        if len(failed_data) + p_status + q_status >= 3:
+            return FailCode.CORUCPTED, []
+        elif len(failed_data) == 2:
+            return FailCode.DATA_DATA, failed_data
+        elif len(failed_data) == 1 and p_status == 1:
+            return FailCode.Data_P, [p_idx, failed_data[0]]
+        elif len(failed_data) == 1 and q_status == 1:
+            return FailCode.Data_Q, [q_idx, failed_data[0]]
+        elif len(failed_data) == 1:
+            return FailCode.Data, failed_data
+        elif p_status == 1 and q_status == 1:
+            return FailCode.PARITY_PARITY, [p_idx, q_idx]
+        elif p_status == 1:
+            return FailCode.Parity_P, [p_idx]
+        elif q_status == 1:
+            return FailCode.Parity_Q, [q_idx]
+        else:
+            return FailCode.GOOD, []
 
     def save_data(self, data_path: str, name: str = None):
         '''
@@ -250,7 +290,6 @@ class RAID6(object):
     def verify_stripe(self, stripe_idx: int, idxs: list=None):
         '''
         Verify the integrity of a stripe in the RAID6 system.
-        Can only check full or damage.
         '''
         if idxs is None:
             (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
@@ -259,17 +298,17 @@ class RAID6(object):
         
         p, q, stripe_data, new_disk_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_parity=True)
         if len(new_disk_idxs) != len(data_disk_idxs):
-            return WrongCode.DAMAGE
+            return ParityCode.WRONG
 
         recompute_p = bytearray(self.block_size)
         recompute_q = bytearray(self.block_size)
         cal_parity_8(recompute_p, recompute_q, stripe_data)
         
         if recompute_p == p and recompute_q == q:
-            return WrongCode.FULL
+            return ParityCode.ACCURATE
         else:
-            return WrongCode.DAMAGE
-    
+            return ParityCode.WRONG
+
     def rebuild_stripe(self, stripe_idx: int, wrong_code: int):
         '''
         Rebuild a stripe in the RAID6 system.
@@ -291,7 +330,7 @@ class RAID6(object):
 
             if verify:
                 stripe_status = self.verify_stripe(stripe_idx, [p_idx, q_idx, data_disk_idxs])
-                if stripe_status == WrongCode.FULL:
+                if stripe_status == ParityCode.ACCURATE:
                     print(f"Stripe {stripe_idx} is verified.")
                 else:
                     raise ValueError(f"Stripe {stripe_idx} is corrupted.")
@@ -323,6 +362,24 @@ class RAID6(object):
         with open(out_path, "wb") as f:
             f.write(data)
             print(f"Data loaded from RAID6 system successfully")
+    
+    def check_disks_status(self):
+        '''
+        Check the status of the disks in the RAID6 system.
+        '''
+        for i in range(self.stripe_width):
+            flag = self.disks[i].status
+            print(f"Disk {i} status: {flag}")
+            for j in range(self.stripe_num):
+                self.status[j][i] = flag
+
+    # Just for test
+    def test_random_fail_disk(self, disk_idxs: list):
+        '''
+        Randomly fail a disk in the RAID6 system.
+        '''
+        for idx in disk_idxs:
+            self.disks[idx].status = False
 
 
 # Example usage
