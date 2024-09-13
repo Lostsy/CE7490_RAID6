@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 class Disk:
     def __init__(self, size: int, id: int):
         self.size = size
+        self.status = True # True: normal, False: damaged
 
         # create a file to simulate the disk
         self.path = "../disk/disk_" + str(id)
@@ -15,17 +16,25 @@ class Disk:
         if offset + size > self.size:
             raise ValueError("Read out of bound")
         
-        with open(self.path, "rb") as f:
-            f.seek(offset)
-            return f.read(size)
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(offset)
+                return f.read(size)
+        except:
+            self.status = False
+            raise ValueError("Disk is damaged")
 
     def write(self, offset: int, data: bytearray):
         if offset + len(data) > self.size:
             raise ValueError("Write out of bound")
 
-        with open(self.path, "r+b") as f:
-            f.seek(offset)
-            f.write(data)
+        try:
+            with open(self.path, "r+b") as f:
+                f.seek(offset)
+                f.write(data)
+        except:
+            self.status = False
+            raise ValueError("Disk is damaged")
 
 
 @dataclass
