@@ -46,6 +46,22 @@ uint8_t GaloisField::divide(uint8_t a, uint8_t b) const {
     return gfilog[255 + gflog[a] - gflog[b]];
 }
 
+uint64_t GaloisField::add(uint64_t a, uint64_t b) const {
+    return a ^ b;
+}
+
+uint64_t GaloisField::mult2(uint64_t a) const {
+    uint64_t result = 0;
+    result = (a << 1) & 0xfefefefefefefefe;
+    result ^= mask(a) & 0x1d1d1d1d1d1d1d1d;
+    return result;
+}
+
 std::vector<uint8_t> GaloisField::get_gfilog() {
     return gfilog;
+}
+
+uint64_t GaloisField::mask(uint64_t a) const {
+    a &= 0x8080808080808080;
+    return (a << 1) - (a >> 7);
 }

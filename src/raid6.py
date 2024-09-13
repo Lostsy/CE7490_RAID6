@@ -1,7 +1,7 @@
 import numpy as np
 from copy import deepcopy
 # from galois_field_old import GaloisField
-from clib.galois_field import GaloisField, cal_parity
+from clib.galois_field import cal_parity_8
 from utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
@@ -151,7 +151,7 @@ class RAID6(object):
             stripe_data = bytearray(0)
             for disk_idx in data_disk_idxs:
                 stripe_data += self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
-        cal_parity(p, q, stripe_data)
+        cal_parity_8(p, q, stripe_data)
 
         # Write back the parity blocks
         self.disks[p_idx].write(stripe_idx * self.block_size, p)
@@ -225,7 +225,7 @@ class RAID6(object):
         for disk_dix in data_disk_idxs:
             stripe_data += self.disks[disk_dix].read(stripe_idx * self.block_size, self.block_size)
 
-        cal_parity(recompute_p, recompute_q, stripe_data)
+        cal_parity_8(recompute_p, recompute_q, stripe_data)
         
         if recompute_p == p and recompute_q == q:
             return WrongCode.FULL
