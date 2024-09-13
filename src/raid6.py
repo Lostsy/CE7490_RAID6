@@ -97,6 +97,37 @@ class RAID6(object):
         '''
         raise NotImplementedError("Not implemented yet")
     
+    def _process_offset_list(self, stripe_idx: int, offset_list: list, mode: str, stripe_data: bytearray, idxs: list=None):
+        '''
+        Handle the offset list for a stripe.
+        '''
+        if idxs is None:
+            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+        else:
+            p_idx, q_idx, data_disk_idxs = idxs
+        
+        stripe_data_offset = 0
+        for offset, size in offset_list:
+            start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
+            end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
+
+            # process the data
+            for disk_idx in range(start_disk_idx, end_disk_idx + 1):
+                if disk_idx == p_idx or disk_idx == q_idx:
+                    continue
+                # Find start offset
+                disk_offset = start_disk_offset if disk_idx == start_disk_idx else stripe_idx * self.block_size
+                # Find process size
+                process_size = end_disk_offset - disk_offset + 1 if disk_idx == end_disk_idx else self.block_size * (stripe_idx + 1) - disk_offset
+
+                # Process the data
+                if mode == "read":
+                    stripe_data[stripe_data_offset : stripe_data_offset + process_size] = self.disks[disk_idx].read(disk_offset, process_size)
+                else:
+                    self.disks[disk_idx].write(disk_offset, stripe_data[stripe_data_offset : stripe_data_offset + process_size])
+                stripe_data_offset += process_size
+        assert stripe_data_offset == len(stripe_data), "Something wrong with the process offset list"
+    
     def _distribute_stripe(self, stripe_idx: int, stripe_data: bytearray, file_name: str):
         '''
         Distribute a stripe of data to the RAID6 system.
@@ -128,32 +159,8 @@ class RAID6(object):
 
         # Write the stripe data to the disks
         (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
-        write_offset = 0
-        for offset, size in offset_list:
-            start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
-            end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
+        self._process_offset_list(stripe_idx, offset_list, "write", stripe_data, idxs=[p_idx, q_idx, data_disk_idxs])
 
-            # Write the data to the disks
-            for disk_idx in range(start_disk_idx, end_disk_idx + 1):
-                if disk_idx == p_idx or disk_idx == q_idx:
-                    continue
-                # Find start offset
-                if disk_idx == start_disk_idx:
-                    disk_offset = start_disk_offset
-                else:
-                    disk_offset = stripe_idx * self.block_size
-
-                # Find write size
-                if disk_idx == end_disk_idx:
-                    write_size = end_disk_offset - disk_offset + 1
-                else:
-                    write_size = self.block_size * (stripe_idx + 1) - disk_offset
-
-                # Write the data
-                self.disks[disk_idx].write(disk_offset, stripe_data[write_offset : write_offset + write_size])
-                write_offset += write_size
-        assert write_offset == len(stripe_data), "Something wrong with writing the distributed stripe data"
-        
         # Update the parity blocks
         p = bytearray(self.block_size)
         q = bytearray(self.block_size)
@@ -324,7 +331,7 @@ class RAID6(object):
         '''
         stripe2data = self.file2stripe[name]
         
-        data = bytearray()
+        data = bytearray(0)
         for stripe_idx, offset_list in stripe2data.items():
             (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
 
@@ -335,29 +342,10 @@ class RAID6(object):
                 else:
                     raise ValueError(f"Stripe {stripe_idx} is corrupted.")
 
-            for offset, size in offset_list:
-                print(f'Load stripe {stripe_idx} offset {offset} size {size}')
-                start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
-                end_disk_idx, end_disk_offset = self._cal_disk_and_offset(stripe_idx, offset + size - 1)
-
-                # Read the data from the disks
-                for disk_idx in range(start_disk_idx, end_disk_idx + 1):
-                    if disk_idx == p_idx or disk_idx == q_idx:
-                        continue
-
-                    # Find start offset
-                    if disk_idx == start_disk_idx:
-                        disk_offset = start_disk_offset
-                    else:
-                        disk_offset = stripe_idx * self.block_size
-
-                    # Find read size
-                    if disk_idx == end_disk_idx:
-                        read_size = end_disk_offset - disk_offset + 1
-                    else:
-                        read_size = self.block_size * (stripe_idx + 1) - disk_offset
-
-                    data += self.disks[disk_idx].read(disk_offset, read_size)
+            stripe_data_size = sum(size for _, size in offset_list)
+            stripe_data = bytearray(stripe_data_size)
+            self._process_offset_list(stripe_idx, offset_list, "read", stripe_data, idxs=[p_idx, q_idx, data_disk_idxs])
+            data += stripe_data
 
         with open(out_path, "wb") as f:
             f.write(data)
