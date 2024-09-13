@@ -58,7 +58,10 @@ class RAID6(object):
         Find the parity disk index for P and Q.
         '''
         base = self.data_disks + stripe_idx
-        return (base % self.stripe_width, (base + 1) % self.stripe_width)
+        p_idx = base % self.stripe_width
+        q_idx = (base + 1) % self.stripe_width
+        data_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+        return (p_idx, q_idx), data_idxs
     
     def _cal_disk_and_offset(self, stripe_idx: int, offset: int):
         '''
@@ -67,8 +70,7 @@ class RAID6(object):
         if offset > self.stripe_size:
             raise ValueError("Invalid offset")
         disk_idx = offset // self.block_size
-        pq_index = self._find_parity_PQ_idx(stripe_idx)
-        data_index = [i for i in range(self.stripe_width) if i not in pq_index]
+        pq_index, data_index = self._find_parity_PQ_idx(stripe_idx)
         return data_index[disk_idx], offset % self.block_size + stripe_idx * self.block_size
 
     def _handle_fragment(self, size: int):
@@ -116,8 +118,7 @@ class RAID6(object):
         assert left_size == 0, "Something wrong with the distributed stripe data"
 
         # Write the stripe data to the disks
-        p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
-        data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+        (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
         write_offset = 0
         for offset, size in offset_list:
             start_disk_idx, start_disk_offset = self._cal_disk_and_offset(stripe_idx, offset)
@@ -148,9 +149,8 @@ class RAID6(object):
         p = bytearray(self.block_size)
         q = bytearray(self.block_size)
         if len(stripe_data) != self.stripe_size:
-            stripe_data = bytearray(0)
-            for disk_idx in data_disk_idxs:
-                stripe_data += self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
+            _, _, stripe_data, _ = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs])
+
         cal_parity_8(p, q, stripe_data)
 
         # Write back the parity blocks
@@ -201,6 +201,41 @@ class RAID6(object):
         
         self.left_size -= data_size
         return stripe2data
+    
+    def _load_stripes(self, stripe_idx: int, idxs: list=None, read_parity: bool=False):
+        '''
+        Load the stripe data from the RAID6 system.
+        '''
+        # [TODO] use multi-thread to load the data
+        if idxs is None:
+            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+        else:
+            p_idx, q_idx, data_disk_idxs = idxs
+
+        new_data_idxs = []
+        stripe_data = bytearray(0)
+        p = None
+        q = None
+
+        for idx, disk_idx in enumerate(data_disk_idxs):
+            if self.disks[disk_idx].status == False:
+                print(f"Disk {disk_idx} is damaged")
+                continue
+
+            now_data = self.disks[disk_idx].read(stripe_idx * self.block_size, self.block_size)
+            if self.disks[disk_idx].status == False:
+                print(f"Disk {disk_idx} is damaged")
+                continue
+            
+            # Successfully read the data from the disk
+            stripe_data += now_data
+            new_data_idxs.append(idx)
+        
+        if read_parity:
+            p = self.disks[p_idx].read(stripe_idx * self.block_size, self.block_size)
+            q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
+
+        return p, q, stripe_data, new_data_idxs
 
     def save_data(self, data_path: str, name: str = None):
         '''
@@ -212,19 +247,22 @@ class RAID6(object):
         self.file2stripe[name] = self._distribute_data(data, name)
         print(f"Data saved to RAID6 system successfully")
     
-    def verify_stripe(self, stripe_idx: int, p_idx: int, q_idx: int, data_disk_idxs: list):
+    def verify_stripe(self, stripe_idx: int, idxs: list=None):
         '''
         Verify the integrity of a stripe in the RAID6 system.
+        Can only check full or damage.
         '''
-        p = self.disks[p_idx].read(stripe_idx * self.block_size, self.block_size)
-        q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
+        if idxs is None:
+            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+        else:
+            p_idx, q_idx, data_disk_idxs = idxs
+        
+        p, q, stripe_data, new_disk_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_parity=True)
+        if len(new_disk_idxs) != len(data_disk_idxs):
+            return WrongCode.DAMAGE
 
         recompute_p = bytearray(self.block_size)
         recompute_q = bytearray(self.block_size)
-        stripe_data = bytearray(0)
-        for disk_dix in data_disk_idxs:
-            stripe_data += self.disks[disk_dix].read(stripe_idx * self.block_size, self.block_size)
-
         cal_parity_8(recompute_p, recompute_q, stripe_data)
         
         if recompute_p == p and recompute_q == q:
@@ -249,17 +287,14 @@ class RAID6(object):
         
         data = bytearray()
         for stripe_idx, offset_list in stripe2data.items():
-            p_idx, q_idx = self._find_parity_PQ_idx(stripe_idx)
-            data_disk_idxs = [i for i in range(self.stripe_width) if i not in [p_idx, q_idx]]
+            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
 
             if verify:
-                stripe_status = self.verify_stripe(stripe_idx, p_idx, q_idx, data_disk_idxs)
+                stripe_status = self.verify_stripe(stripe_idx, [p_idx, q_idx, data_disk_idxs])
                 if stripe_status == WrongCode.FULL:
                     print(f"Stripe {stripe_idx} is verified.")
-                elif stripe_status == WrongCode.DAMAGE:
-                    raise ValueError(f"Stripe {stripe_idx} is corrupted.")
                 else:
-                    self.rebuild_stripe(stripe_idx, stripe_status)
+                    raise ValueError(f"Stripe {stripe_idx} is corrupted.")
 
             for offset, size in offset_list:
                 print(f'Load stripe {stripe_idx} offset {offset} size {size}')
