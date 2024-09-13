@@ -22,7 +22,6 @@ class Disk:
                 return f.read(size)
         except:
             self.status = False
-            raise ValueError("Disk is damaged")
 
     def write(self, offset: int, data: bytearray):
         if offset + len(data) > self.size:
@@ -34,7 +33,6 @@ class Disk:
                 f.write(data)
         except:
             self.status = False
-            raise ValueError("Disk is damaged")
 
 
 @dataclass
