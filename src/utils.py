@@ -8,9 +8,16 @@ class Disk:
 
         # create a file to simulate the disk
         self.path = "../disk/disk_" + str(id)
-        with open(self.path, "wb") as f:
-            f.write(b"\x00" * size)
-            print(f"Disk {id} size: {size}, path: {self.path}")
+
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(0, 2)
+                if f.tell() != size:
+                    raise ValueError("Disk size mismatch")
+        except:
+            self.init_new_disk(self.path)
+            
+        print(f"Disk {id} is loaded with size {size} bytes")
     
     def read(self, offset: int, size: int):
         if offset + size > self.size:
@@ -34,6 +41,19 @@ class Disk:
         except:
             self.status = False
 
+    def check(self):
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(0, 2)
+                if f.tell() != self.size:
+                    self.status = False
+        except:
+            self.status = False
+        return self.status
+
+    def init_new_disk(self, path: str):
+        with open(path, "wb") as f:
+            f.write(b"\x00" * self.size)
 
 @dataclass
 class RAID6Config:

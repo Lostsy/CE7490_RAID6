@@ -1,7 +1,7 @@
 import numpy as np
 from copy import deepcopy
 # from galois_field_old import GaloisField
-from clib.galois_field import cal_parity_8
+from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
@@ -14,7 +14,7 @@ class ParityCode(Enum):
 
 # related to the disk failure
 class FailCode(Enum):
-    Data = 0
+    DATA = 0
     Parity_P = 1
     Parity_Q = 2
     Data_P = 3
@@ -218,7 +218,7 @@ class RAID6(object):
         self.left_size -= data_size
         return stripe2data
     
-    def _load_stripes(self, stripe_idx: int, idxs: list=None, read_parity: bool=False):
+    def _load_stripes(self, stripe_idx: int, idxs: list=None, read_p: bool=False, read_q: bool=False):
         '''
         Load the stripe data from the RAID6 system.
         '''
@@ -240,11 +240,115 @@ class RAID6(object):
             stripe_data += now_data
             new_data_idxs.append(idx)
         
-        if read_parity:
+        if read_p:
             p = self.disks[p_idx].read(stripe_idx * self.block_size, self.block_size)
+        if read_q:
             q = self.disks[q_idx].read(stripe_idx * self.block_size, self.block_size)
 
         return p, q, stripe_data, new_data_idxs
+    
+    def _recover_stripe(self, stripe_idx: int, wrong_code: int, failed_idxs: list):
+        '''
+        Recover a stripe in the RAID6 system.
+        '''
+        if wrong_code == FailCode.GOOD:
+            print(f"Stripe {stripe_idx} is good.")
+            return True
+        
+        if wrong_code == FailCode.CORUCPTED:
+            print(f"Stripe {stripe_idx} cannot be recovered.")
+            return False
+
+        if wrong_code == FailCode.DATA:
+            p, _, stripe_data, _ = self._load_stripes(stripe_idx, read_p=True)
+            inter_res = p + stripe_data
+            new_data = bytearray(self.block_size)
+            cal_parity_p(new_data, inter_res)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
+            print(f"Recover stripe {stripe_idx} with data {failed_idxs[0]}")
+            return True
+        
+        if wrong_code == FailCode.Parity_P:
+            _, _, stripe_data, _ = self._load_stripes(stripe_idx)
+            new_p = bytearray(self.block_size)
+            cal_parity_p(new_p, stripe_data)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
+            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]}")
+            return True
+        
+        if wrong_code == FailCode.Parity_Q:
+            _, _, stripe_data, _ = self._load_stripes(stripe_idx)
+            new_q = bytearray(self.block_size)
+            cal_parity_q_8(new_q, stripe_data)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
+            print(f"Recover stripe {stripe_idx} with q parity {failed_idxs[0]}")
+            return True
+
+        if wrong_code == FailCode.PARITY_PARITY:
+            _, _, stripe_data, _ = self._load_stripes(stripe_idx)
+            new_p = bytearray(self.block_size)
+            new_q = bytearray(self.block_size)
+            cal_parity_8(new_p, new_q, stripe_data)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_p)
+            self.disks[failed_idxs[1]].write(stripe_idx * self.block_size, new_q)
+            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]} and q parity {failed_idxs[1]}")
+            return True
+        
+        if wrong_code == FailCode.Data_P:
+            _, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_q=True)
+            inter_res = bytearray(self.block_size)
+            cal_parity_q(inter_res, stripe_data, new_data_idxs)
+            idx = -1
+            exist_idxs = set(new_data_idxs)
+            for i in range(self.data_disks):
+                if i not in exist_idxs:
+                    idx = i
+            new_data = bytearray(self.block_size)
+            q_recover_data(new_data, q, inter_res, idx)
+            self.disks[failed_idxs[1]].write(stripe_idx * self.block_size, new_data)
+
+            new_p = bytearray(self.block_size)
+            inter_res = stripe_data + new_data
+            cal_parity_p(new_p, inter_res)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_p)
+            return True
+        
+        if wrong_code == FailCode.Data_Q:
+            p, _, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_p=True)
+            inter_res = p + stripe_data
+            new_data = bytearray(self.block_size)
+            cal_parity_p(new_data, inter_res)
+            self.disks[failed_idxs[1]].write(stripe_idx * self.block_size, new_data)
+
+            exist_idxs = set(new_data_idxs)
+            for idx in range(self.data_disks):
+                if idx not in exist_idxs:
+                    new_data_idxs.append(idx)
+                    break
+            inter_res = stripe_data + new_data
+            new_q = bytearray(self.block_size)
+            cal_parity_q(new_q, inter_res, new_data_idxs)
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_q)
+            return True
+
+        if wrong_code == FailCode.DATA_DATA:
+            p, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_p=True, read_q=True)
+            inter_p = bytearray(self.block_size)
+            inter_q = bytearray(self.block_size)
+            cal_parity_p(inter_p, stripe_data)
+            cal_parity_q(inter_q, stripe_data, new_data_idxs)
+            
+            idxs = []
+            exist_idxs = set(new_data_idxs)
+            for idx in range(self.data_disks):
+                if idx not in exist_idxs:
+                    idxs.append(idx)
+            new_data1 = bytearray(self.block_size)
+            new_data2 = bytearray(self.block_size)
+            recover_data_data(new_data1, new_data2, p, inter_p, q, inter_q, idxs[0], idxs[1])
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data1)
+            self.disks[failed_idxs[1]].write(stripe_idx * self.block_size, new_data2)
+            return True
     
     def _detect_stripe_failcode(self, stripe_idx: int):
         '''
@@ -303,7 +407,7 @@ class RAID6(object):
         else:
             p_idx, q_idx, data_disk_idxs = idxs
         
-        p, q, stripe_data, new_disk_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_parity=True)
+        p, q, stripe_data, new_disk_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_p=True, read_q=True)
         if len(new_disk_idxs) != len(data_disk_idxs):
             return ParityCode.WRONG
 
@@ -315,13 +419,6 @@ class RAID6(object):
             return ParityCode.ACCURATE
         else:
             return ParityCode.WRONG
-
-    def rebuild_stripe(self, stripe_idx: int, wrong_code: int):
-        '''
-        Rebuild a stripe in the RAID6 system.
-        '''
-        raise NotImplementedError("Not implemented yet")
-        return True
 
     def load_data(self, name: str, out_path: str, verify=False):
         '''
@@ -356,19 +453,23 @@ class RAID6(object):
         Check the status of the disks in the RAID6 system.
         '''
         for i in range(self.stripe_width):
-            flag = self.disks[i].status
+            flag = self.disks[i].check()
             print(f"Disk {i} status: {flag}")
             for j in range(self.stripe_num):
                 self.status[j][i] = flag
-
-    # Just for test
-    def test_random_fail_disk(self, disk_idxs: list):
+            if flag == False:
+                self.disks[i].init_new_disk(self.disks[i].path + "_new")
+    
+    def recover_disks(self):
         '''
-        Randomly fail a disk in the RAID6 system.
+        Recover the disks in the RAID6 system.
         '''
-        for idx in disk_idxs:
-            self.disks[idx].status = False
-
+        for stripe_idx in range(self.stripe_num):
+            fail_code, failed_idxs = self._detect_stripe_failcode(stripe_idx)
+            if fail_code == FailCode.GOOD:
+                continue
+            self._recover_stripe(stripe_idx, fail_code, failed_idxs)
+        print(f"Disks recovered successfully")
 
 # Example usage
 if __name__ == "__main__":
