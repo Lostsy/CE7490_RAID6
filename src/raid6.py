@@ -578,7 +578,7 @@ class RAID6(object):
 # Example usage
 if __name__ == "__main__":
     # Initialize the RAID6 system
-    config = RAID6Config()
+    config = RAID6Config(data_disks=6, stripe_width=8)
     print(config)
     raid6 = RAID6(config)
 

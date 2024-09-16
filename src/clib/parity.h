@@ -19,4 +19,10 @@ void recover_data_data(py::buffer data1, py::buffer data2,
                        py::buffer p, py::buffer inter_p,
                        py::buffer q, py::buffer inter_q,
                        int idx1, int idx2);
+
+// Just for test
+void cal_parity_p_rm8(py::buffer p, py::buffer data);
+void cal_parity_p_rmunrolling(py::buffer p, py::buffer data);
+void cal_parity_q_rmunrolling(py::buffer q, py::buffer data, std::vector<int> idxs);
+void cal_parity_q_8_rmunrolling(py::buffer q, py::buffer data);
 #endif

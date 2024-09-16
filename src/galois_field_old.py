@@ -46,3 +46,28 @@ class GaloisField:
     
     def get_gfilog(self):
         return self.gfilog
+
+
+def cal_parity_p_py(p, data):
+    gf = GaloisField()
+    
+    block_size = len(p)
+    width = len(data) // len(p)
+
+    for i in range(0, width):
+        base = i * block_size
+        for j in range(0, block_size):
+            p[j] = gf.add(p[j], data[base + j])
+
+
+def cal_parity_q_py(q, data):
+    gf = GaloisField()
+    
+    block_size = len(q)
+    width = len(data) // len(q)
+
+    for i in range(0, width):
+        base = i * block_size
+        g = gf.get_gfilog()[i]
+        for j in range(0, block_size):
+            q[j] = gf.add(q[j], gf.multiply(data[base + j], g))
