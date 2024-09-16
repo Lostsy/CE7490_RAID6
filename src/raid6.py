@@ -471,6 +471,20 @@ class RAID6(object):
             self._recover_stripe(stripe_idx, fail_code, failed_idxs)
         print(f"Disks recovered successfully")
 
+    def _update_parity_by_stripe_id(self, stripe_idx: int):
+        '''
+        Update the parity blocks by stripe id.
+        '''
+        (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+        p = bytearray(self.block_size)
+        q = bytearray(self.block_size)
+        _, _, stripe_data, _ = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs])
+        cal_parity_8(p, q, stripe_data)
+        self.disks[p_idx].write(stripe_idx * self.block_size, p)
+        self.disks[q_idx].write(stripe_idx * self.block_size, q)
+        return True
+
+
     def delete_data(self, file_name: str):
         '''
         Delete data from the RAID6 system.
@@ -497,17 +511,59 @@ class RAID6(object):
                     # If the stripe was fully used, add it back as free space
                     self.stripe_status.add((size, stripe_idx))
 
-            # update the parity blocks
-            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
-            p, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_p=True, read_q=True)
-            cal_parity_8(p, q, stripe_data)
-            self.disks[p_idx].write(stripe_idx * self.block_size, p)
-            self.disks[q_idx].write(stripe_idx * self.block_size, q)
+
+            # Do not need to update the parity blocks, lazy update for deletion
+            # self._update_parity_by_stripe_id(stripe_idx)
+
 
         del self.file2stripe[file_name]
         self.left_size += sum(id_size[0][1] for _, id_size in stripe_info.items())
 
         print(f"Data {file_name} deleted from RAID6 system successfully")
+
+    def modify_data(self, file_name: str, data_path: str):
+        '''
+        Modify the data in the RAID6 system.
+        Apply in-place modification to the data in the RAID6 system.
+        input:
+            file_name: str, the name of the file to be modified
+            data_path: str, the path of the new data
+        '''
+        if file_name not in self.file2stripe:
+            print(f"File {file_name} does not exist in the RAID6 system")
+            return False
+        
+        with open(data_path, "rb") as f:
+            data = f.read()
+
+        stripe_info = self.file2stripe[file_name]
+        # Update based on the original data size and the new data size
+        # if data_size >= len(data): 
+        # write the data to the location of current data
+        # The rest part will be set empty
+        # if data_size < len(data):
+        # write the data to the location of current data
+        # the rest part will request for new space
+        involved_stripe = set(stripe_info.keys())
+
+        for stripe_idx, offset_list in stripe_info.items():
+            for offset, size in offset_list:
+                if len(data) <= size:
+                    self._process_offset_list(stripe_idx, [(offset, len(data))], "write", data[:size])
+                    # Set the rest part empty
+                    self.stripe2file[stripe_idx][offset + len(data)] = [None, size - len(data)]
+                    data = data[size:]
+        # Request for new space
+        if len(data) > 0:
+            # include the involve stripe into the involved_stripe
+            pass
+
+        # Update the parity blocks
+        for stripe_idx in involved_stripe:
+            self._update_parity_by_stripe_id(stripe_idx)
+
+        return True
+
 
 # Example usage
 if __name__ == "__main__":
