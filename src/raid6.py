@@ -471,6 +471,44 @@ class RAID6(object):
             self._recover_stripe(stripe_idx, fail_code, failed_idxs)
         print(f"Disks recovered successfully")
 
+    def delete_data(self, file_name: str):
+        '''
+        Delete data from the RAID6 system.
+        '''
+        if file_name not in self.file2stripe:
+            print(f"File {file_name} does not exist in the RAID6 system")
+            return False
+        
+        stripe_info = self.file2stripe[file_name]
+        for stripe_idx, offset_list in stripe_info.items():
+            for offset, size in offset_list:
+                # Mark the blocks as empty
+                self.stripe2file[stripe_idx][offset] = [None, size]
+                
+                # Update the stripe status (add the freed space back)
+                for idx, stripe in enumerate(self.stripe_status):
+                    if stripe[1] == stripe_idx:
+                        # Merge the free space with the existing stripe
+                        new_size = stripe[0] + size
+                        self.stripe_status.remove(stripe)
+                        self.stripe_status.add((new_size, stripe_idx))
+                        break
+                else:
+                    # If the stripe was fully used, add it back as free space
+                    self.stripe_status.add((size, stripe_idx))
+
+            # update the parity blocks
+            (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+            p, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs], read_p=True, read_q=True)
+            cal_parity_8(p, q, stripe_data)
+            self.disks[p_idx].write(stripe_idx * self.block_size, p)
+            self.disks[q_idx].write(stripe_idx * self.block_size, q)
+
+        del self.file2stripe[file_name]
+        self.left_size += sum(id_size[0][1] for _, id_size in stripe_info.items())
+
+        print(f"Data {file_name} deleted from RAID6 system successfully")
+
 # Example usage
 if __name__ == "__main__":
     # Initialize the RAID6 system
