@@ -156,7 +156,7 @@ void cal_parity_q_8(py::buffer q, py::buffer data) {
 
 void q_recover_data(py::buffer data, py::buffer q, py::buffer inter_q, int idx) {
     py::buffer_info q_info = q.request();
-    py::buffer_info inter_q_info = q.request();
+    py::buffer_info inter_q_info = inter_q.request();
     py::buffer_info data_info = data.request();
 
     auto q_ptr = static_cast<uint8_t *>(q_info.ptr);

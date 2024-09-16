@@ -5,6 +5,7 @@ from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_pa
 from utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
+import time
 
 # only use to check parity
 # cannot detect disk failure
@@ -260,41 +261,42 @@ class RAID6(object):
             return False
 
         if wrong_code == FailCode.DATA:
+            print(f"Recover stripe {stripe_idx} with data {failed_idxs[0]}")
             p, _, stripe_data, _ = self._load_stripes(stripe_idx, read_p=True)
             inter_res = p + stripe_data
             new_data = bytearray(self.block_size)
             cal_parity_p(new_data, inter_res)
             self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
-            print(f"Recover stripe {stripe_idx} with data {failed_idxs[0]}")
             return True
         
         if wrong_code == FailCode.Parity_P:
+            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]}")
             _, _, stripe_data, _ = self._load_stripes(stripe_idx)
             new_p = bytearray(self.block_size)
             cal_parity_p(new_p, stripe_data)
-            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
-            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]}")
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_p)
             return True
         
         if wrong_code == FailCode.Parity_Q:
+            print(f"Recover stripe {stripe_idx} with q parity {failed_idxs[0]}")
             _, _, stripe_data, _ = self._load_stripes(stripe_idx)
             new_q = bytearray(self.block_size)
             cal_parity_q_8(new_q, stripe_data)
-            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_data)
-            print(f"Recover stripe {stripe_idx} with q parity {failed_idxs[0]}")
+            self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_q)
             return True
 
         if wrong_code == FailCode.PARITY_PARITY:
+            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]} and q parity {failed_idxs[1]}")
             _, _, stripe_data, _ = self._load_stripes(stripe_idx)
             new_p = bytearray(self.block_size)
             new_q = bytearray(self.block_size)
             cal_parity_8(new_p, new_q, stripe_data)
             self.disks[failed_idxs[0]].write(stripe_idx * self.block_size, new_p)
             self.disks[failed_idxs[1]].write(stripe_idx * self.block_size, new_q)
-            print(f"Recover stripe {stripe_idx} with p parity {failed_idxs[0]} and q parity {failed_idxs[1]}")
             return True
         
         if wrong_code == FailCode.Data_P:
+            print(f"Recover stripe {stripe_idx} with data {failed_idxs[1]} and p parity {failed_idxs[0]}")
             _, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_q=True)
             inter_res = bytearray(self.block_size)
             cal_parity_q(inter_res, stripe_data, new_data_idxs)
@@ -314,6 +316,7 @@ class RAID6(object):
             return True
         
         if wrong_code == FailCode.Data_Q:
+            print(f"Recover stripe {stripe_idx} with data {failed_idxs[1]} and q parity {failed_idxs[0]}")
             p, _, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_p=True)
             inter_res = p + stripe_data
             new_data = bytearray(self.block_size)
@@ -332,6 +335,7 @@ class RAID6(object):
             return True
 
         if wrong_code == FailCode.DATA_DATA:
+            print(f"Recover stripe {stripe_idx} with data {failed_idxs[0]} and {failed_idxs[1]}")
             p, q, stripe_data, new_data_idxs = self._load_stripes(stripe_idx, read_p=True, read_q=True)
             inter_p = bytearray(self.block_size)
             inter_q = bytearray(self.block_size)
@@ -378,7 +382,7 @@ class RAID6(object):
         elif len(failed_data) == 1 and q_status == 1:
             return FailCode.Data_Q, [q_idx, failed_data[0]]
         elif len(failed_data) == 1:
-            return FailCode.Data, failed_data
+            return FailCode.DATA, failed_data
         elif p_status == 1 and q_status == 1:
             return FailCode.PARITY_PARITY, [p_idx, q_idx]
         elif p_status == 1:
@@ -465,10 +469,16 @@ class RAID6(object):
         Recover the disks in the RAID6 system.
         '''
         for stripe_idx in range(self.stripe_num):
+            if len(self.stripe2file[stripe_idx]) == 1 and self.stripe2file[stripe_idx][0][0] is None:
+                for i in range(self.stripe_width):
+                    self.status[stripe_idx][i] = True
+                continue
             fail_code, failed_idxs = self._detect_stripe_failcode(stripe_idx)
             if fail_code == FailCode.GOOD:
                 continue
             self._recover_stripe(stripe_idx, fail_code, failed_idxs)
+            for i in failed_idxs:
+                self.status[stripe_idx][i] = True
         print(f"Disks recovered successfully")
 
     def _update_parity_by_stripe_id(self, stripe_idx: int):
@@ -575,5 +585,12 @@ if __name__ == "__main__":
     # Save data to the RAID6 system
     fp = "../data/sample.png"
     raid6.save_data(fp, name="sample.png")
+    
+    time.sleep(10)
 
+    # Check the status of the disks
+    raid6.check_disks_status()
+    raid6.recover_disks()
+
+    # Load data from the RAID6 system
     raid6.load_data("sample.png", "../data/sample_out.png", verify=True)

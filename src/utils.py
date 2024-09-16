@@ -52,6 +52,8 @@ class Disk:
         return self.status
 
     def init_new_disk(self, path: str):
+        self.path = path
+        self.status = True
         with open(path, "wb") as f:
             f.write(b"\x00" * self.size)
 
