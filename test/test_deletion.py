@@ -10,15 +10,7 @@
 
 import src
 import pytest
-import hashlib
-from test_save_load import build_raid6
-
-def calculate_md5(file_path):
-    hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+from test_save_load import build_raid6, calculate_md5
 
 def test_delete_single_file():
     '''
@@ -66,7 +58,7 @@ def test_delete_multiple_files():
     print(raid6.file2stripe)
     print(raid6.stripe_status)
 
-    raid6.delete_data("cockatoo.png", verbose=True)
+    raid6.delete_data("cockatoo.png")
     
     # check if the files are deleted
     print(f"After Delete================================")
@@ -106,19 +98,11 @@ def test_delete_withadd_multiple_files():
     print(raid6.file2stripe)
     print(raid6.stripe_status)
 
-    # raid6.delete_data("cockatoo.png", verbose=True)
-    
-    # # check if the files are deleted
-    # print(f"After Delete================================")
-    # print(raid6.stripe2file)
-    # print(raid6.file2stripe)
-    # print(raid6.stripe_status)
-
-
-
-    
-
-
+    raid6.save_data(img_paths[0], name="cockatoo.jpg")
+    print(f"After Save================================")
+    print(raid6.stripe2file)
+    print(raid6.file2stripe)
+    print(raid6.stripe_status)
 
 
 if __name__=="__main__":

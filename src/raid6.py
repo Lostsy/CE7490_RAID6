@@ -4,7 +4,7 @@ from copy import deepcopy
 import logging
 # from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from src.clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
-from src.utils import Disk, RAID6Config
+from src.utils import Disk, RAID6Config, merge_tuples
 from sortedcontainers import SortedList
 from enum import Enum
 import time
@@ -574,7 +574,82 @@ class RAID6(object):
         # print(f"Data {file_name} deleted from RAID6 system successfully")
         self.logger.info(f"Data {file_name} deleted from RAID6 system successfully")
 
-    def modify_data(self, file_name: str, data_path: str):
+    def _is_offset_available(self, stripe_idx: int, offset_list):
+        '''
+        Check if the offset list is available for the stripe.
+        '''
+        storage_dict = self.stripe2file[stripe_idx]
+        for offset, size in offset_list:
+            for start_offset, (filename, filesize) in storage_dict.items():
+                # 检查是否有任何重叠
+                if start_offset is not None and filename is not None:
+                    if (offset < start_offset + filesize) and (start_offset < offset + size):
+                        # 如果有重叠，返回False
+                        return False
+        return True
+
+
+    def _distribute_stripe_with_offset(self, stripe_idx: int, stripe_data: bytearray, file_name: str, offset_list: list):
+        '''
+        Distribute a stripe of data to the RAID6 system.
+        '''
+        # Assume the stripe data is less than the left capacity
+        self.logger.info(f'Distribute stripe {stripe_idx} with data size {len(stripe_data)}')
+
+        assert len(stripe_data) == sum(size for _, size in offset_list), "The stripe data size does not match the offset list"
+        # # Find the offset to write the stripe data
+        left_size = len(stripe_data)
+        # Modify the stripe2file based on the offset list
+        # self.stripe2file[stripe_idx] will be a dictionary of offset, [file_name, size]
+        # Check that all the offset_list is valid, which means the offset is not occupied, in the (None, size) state
+        if not self._is_offset_available(stripe_idx, offset_list):
+            self.logger.error(f"Offset list {offset_list} is not available for stripe {stripe_idx}")
+            return False
+
+        new_dict = self.stripe2file[stripe_idx].copy()
+
+        for offset, size in offset_list:
+            for start_offset, (filename, filesize) in list(new_dict.items()):
+                if filename is None and (start_offset <= offset or offset + size <= start_offset + filesize):
+                    
+                    
+
+                    before_space = offset - start_offset
+                    after_space = (start_offset + filesize) - (offset + size)
+
+                    if before_space > 0:
+                        new_dict[start_offset] = [None, before_space]
+                    else:
+                        del new_dict[start_offset] 
+
+                    if after_space > 0:
+                        new_dict[offset + size] = [None, after_space]
+                    
+                    new_dict[offset] = [file_name, size]
+                    
+                    break
+        self.stripe2file[stripe_idx] = new_dict
+        print(f"New dict:{new_dict}\n offset_list:{offset_list}")
+
+        # Write the stripe data to the disks
+        (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
+        self._process_offset_list(stripe_idx, offset_list, "write", stripe_data, idxs=[p_idx, q_idx, data_disk_idxs])
+
+        # Update the parity blocks
+        p = bytearray(self.block_size)
+        q = bytearray(self.block_size)
+        if len(stripe_data) != self.stripe_size:
+            _, _, stripe_data, _ = self._load_stripes(stripe_idx, idxs=[p_idx, q_idx, data_disk_idxs])
+
+        cal_parity_8(p, q, stripe_data)
+
+        # Write back the parity blocks
+        self.disks[p_idx].write(stripe_idx * self.block_size, p)
+        self.disks[q_idx].write(stripe_idx * self.block_size, q)
+        
+        return offset_list
+
+    def modify_data(self, file_name: str, rewrite_name: str, data_path: str):
         '''
         Modify the data in the RAID6 system.
         Apply in-place modification to the data in the RAID6 system.
@@ -590,6 +665,7 @@ class RAID6(object):
             data = f.read()
 
         stripe_info = self.file2stripe[file_name]
+        self.delete_data(file_name)
         # Update based on the original data size and the new data size
         # if data_size >= len(data): 
         # write the data to the location of current data
@@ -597,23 +673,96 @@ class RAID6(object):
         # if data_size < len(data):
         # write the data to the location of current data
         # the rest part will request for new space
-        involved_stripe = set(stripe_info.keys())
+        # involved_stripe = set()
 
-        for stripe_idx, offset_list in stripe_info.items():
-            for offset, size in offset_list:
-                if len(data) <= size:
-                    self._process_offset_list(stripe_idx, [(offset, len(data))], "write", data[:size])
-                    # Set the rest part empty
-                    self.stripe2file[stripe_idx][offset + len(data)] = [None, size - len(data)]
-                    data = data[size:]
-        # Request for new space
+        # Generate a new stripe_info based on data size
+        # stripe_size = sum(id_size[0][1] for _, id_size in stripe_info.items())
+        stripe_data = bytearray(0)
+        file2stripe = {}
+        for stripe_idx, info in stripe_info.items():
+            # print(f"Stripe {stripe_idx} with info {info}")
+            # inn_offset, inn_size = info[0]
+            inn_size = sum(size for _, size in info)
+            if len(data) >= inn_size:
+                stripe_data = data[:inn_size]
+                data = data[inn_size:]
+                inn_offset_list = self._distribute_stripe_with_offset(
+                    stripe_idx, stripe_data, rewrite_name, info
+                )
+                file2stripe[stripe_idx] = inn_offset_list
+                for item in self.stripe_status:
+                    if item[1] == stripe_idx:
+                        self.stripe_status.remove(item)
+                        rest_space = item[0] - inn_size
+                        break
+                self.stripe_status.add((rest_space, stripe_idx))
+                # involved_stripe.add(stripe_idx)
+            else:
+                stripe_data = data
+                # modify the info to get a new offset list that match the datasize
+                new_offset_list = []
+                left_size = len(data)
+                for offset, size in info:
+                    if size > left_size:
+                        new_offset_list.append((offset, left_size))
+                        break
+                    elif size <= left_size:
+                        new_offset_list.append((offset, size))
+                        left_size -= size
+                for item in self.stripe_status:
+                    if item[1] == stripe_idx:
+                        self.stripe_status.remove(item)
+                        rest_space = item[0] - len(data)
+                        break
+
+                inn_offset_list = self._distribute_stripe_with_offset(
+                    stripe_idx, stripe_data, rewrite_name, new_offset_list
+                )
+                # involved_stripe.add(stripe_idx)
+                file2stripe[stripe_idx] = inn_offset_list
+                break
+        # Update the file2stripe
+        self.file2stripe[rewrite_name] = file2stripe
+        print(f"At Here!")
+        print(self.file2stripe)
+        # If need extra space
         if len(data) > 0:
-            # include the involve stripe into the involved_stripe
-            self._distribute_data(data, file_name)
+            stripe2data = self._distribute_data(data, rewrite_name)
+            # c
+            # self.file2stripe[rewrite_name].append(stripe2data) # TODO
+            for key in self.file2stripe[rewrite_name].keys():
+                if key in stripe2data:
+                    self.file2stripe[rewrite_name][key] += stripe2data[key]
+            # for stripe_idx, offset_list in stripe2data.items():
+            #     involved_stripe.add(stripe_idx)
+        print(f"At Here!!!")
+        print(self.file2stripe)
+        print(self.stripe2file[0])
+
+        # Merge the data pieces
+        # Update file2stripe
+        for idx in self.file2stripe[rewrite_name].keys():
+            new_offset_list, merge_points = merge_tuples(self.file2stripe[rewrite_name][idx])
+            self.file2stripe[rewrite_name][idx] = new_offset_list
+            for point in merge_points:
+                # delete the offset in merge_points
+                self.stripe2file[idx].pop(point)
+            for offset, size in new_offset_list:
+                self.stripe2file[idx][offset] = [rewrite_name, size]
+
+        # Update stripe2file
+        pass
+        # Update stripe_status
+        pass
+                    
+
+        print(f"At Here!!!")
+        print(self.file2stripe[rewrite_name])
+
 
         # Update the parity blocks
-        for stripe_idx in involved_stripe:
-            self._update_parity_by_stripe_id(stripe_idx)
+        # for stripe_idx in involved_stripe:
+        #     self._update_parity_by_stripe_id(stripe_idx)
 
         return True
 

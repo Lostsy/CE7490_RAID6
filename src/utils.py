@@ -74,3 +74,25 @@ class RAID6Config:
         assert self.parity_disks == 2, "RAID6 does not support 2 parity disks"
         # assert self.stripe_width == self.data_disks + self.parity_disks, "Invalid RAID6 configuration"
         assert self.disk_size % self.block_size == 0, "Disk size should be multiple of block size"
+
+
+def merge_tuples(tuple_list):
+    if len(tuple_list) <= 1:
+        return tuple_list, []
+    
+    merged_list = []
+    merge_point = []
+    current_start, current_size = tuple_list[0]
+    for i in range(1, len(tuple_list)):
+        next_start, next_size = tuple_list[i]
+        
+        if current_start + current_size == next_start:
+            current_size += next_size
+            merge_point.append(next_start)
+        else:
+            merged_list.append((current_start, current_size))
+            current_start, current_size = next_start, next_size
+    
+    merged_list.append((current_start, current_size))
+    
+    return merged_list, merge_point
