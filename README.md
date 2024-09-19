@@ -33,5 +33,6 @@ python setup.py build_ext --inplace
 ```
 python test_parity.py
 python test_recover.py
-python test_save_load.py
+pytest test/test_save_load.py  -log-cli-level=INFO
+pytest test/test_deletion.py -log-cli-level=INFO
 ```
