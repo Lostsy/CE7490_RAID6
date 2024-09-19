@@ -1,8 +1,8 @@
+import os
 import numpy as np
-from copy import deepcopy
-# from galois_field_old import GaloisField
-from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
-from utils import Disk, RAID6Config
+# from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
+from src.clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
+from src.utils import Disk, RAID6Config
 from sortedcontainers import SortedList
 from enum import Enum
 import time
@@ -44,15 +44,21 @@ class RAID6(object):
 
     '''
     def __init__(self, config: RAID6Config):
+        # Initialize the RAID6 system configuration
+        self.data_path = config.data_path
         self.data_disks = config.data_disks
         self.parity_disks = config.parity_disks
-        self.stripe_width = config.stripe_width
+        # self.stripe_width = config.stripe_width
+        self.stripe_width = self.data_disks + self.parity_disks
         self.block_size = config.block_size
         self.stripe_num = config.disk_size // self.block_size
         self.stripe_size = self.block_size * self.data_disks
-        # self.galois_field = GaloisField()
         
-        self.disks = [Disk(config.disk_size, id=_) for _ in range(self.stripe_width)]
+        # Create folders for data and parity disks
+        if not os.path.exists(self.data_path):
+            os.makedirs(self.data_path, exist_ok=True)
+        
+        self.disks = [Disk(config.data_path, config.disk_size, id=_) for _ in range(self.stripe_width)]
         self.file2stripe = {} # use to track the file storage location
         self.stripe2file = [{0: [None, self.stripe_size]} for _ in range(self.stripe_num)] # use to track the stripe and the file
         self.stripe_status = SortedList() # use to track the stripe status
@@ -566,7 +572,7 @@ class RAID6(object):
         # Request for new space
         if len(data) > 0:
             # include the involve stripe into the involved_stripe
-            pass
+            self._distribute_data(data, file_name)
 
         # Update the parity blocks
         for stripe_idx in involved_stripe:
@@ -582,15 +588,15 @@ if __name__ == "__main__":
     print(config)
     raid6 = RAID6(config)
 
-    # Save data to the RAID6 system
-    fp = "../data/sample.png"
-    raid6.save_data(fp, name="sample.png")
+    # # Save data to the RAID6 system
+    # fp = "../data/sample.png"
+    # raid6.save_data(fp, name="sample.png")
     
-    time.sleep(10)
+    # time.sleep(10)
 
-    # Check the status of the disks
-    raid6.check_disks_status()
-    raid6.recover_disks()
+    # # Check the status of the disks
+    # raid6.check_disks_status()
+    # raid6.recover_disks()
 
-    # Load data from the RAID6 system
-    raid6.load_data("sample.png", "../data/sample_out.png", verify=True)
+    # # Load data from the RAID6 system
+    # raid6.load_data("sample.png", "../data/sample_out.png", verify=True)

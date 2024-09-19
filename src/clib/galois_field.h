@@ -2,6 +2,7 @@
 #define GALOISFIELD_H
 
 #include <vector>
+#include <cstdint>
 
 class GaloisField {
 public:

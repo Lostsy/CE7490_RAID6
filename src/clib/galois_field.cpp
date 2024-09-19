@@ -1,4 +1,5 @@
 #include "galois_field.h"
+#include <stdexcept>
 
 GaloisField::GaloisField() : gflog(256, 0), gfilog(512, 0) {
     initializeTables();
