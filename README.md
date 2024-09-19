@@ -22,8 +22,9 @@ A storage system based on RAID6, has features:
 ## Get started
 ```
 conda create -n raid6 python=3.10
-pip install pybind11
 git clone https://github.com/Lostsy/CE7490_RAID6.git
+cd CE7490_RAID6
+pip install -e .
 cd CE7490_RAID6/src/clib
 python setup.py build_ext --inplace
 ```
@@ -32,4 +33,5 @@ python setup.py build_ext --inplace
 ```
 python test_parity.py
 python test_recover.py
+python test_save_load.py
 ```

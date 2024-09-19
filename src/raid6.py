@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from copy import deepcopy
 # from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from src.clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from src.utils import Disk, RAID6Config
@@ -151,8 +152,8 @@ class RAID6(object):
                 if info[1] > left_size:
                     offset_list.append((offset, left_size))
                     # update the stripe2file, split the fragment
-                    self.stripe2file[stripe_idx][offset][1] = left_size
-                    self.stripe2file[stripe_idx][offset + left_size] = [None, info[1] - left_size]
+                    self.stripe2file[stripe_idx][offset + left_size] = [None, info[1] - deepcopy(left_size)]
+                    self.stripe2file[stripe_idx][offset][1] = deepcopy(left_size)
                     left_size = 0
                     break
                 elif info[1] < left_size:
