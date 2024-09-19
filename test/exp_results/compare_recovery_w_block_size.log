@@ -1,0 +1,12 @@
+Block size: 1024, Corrupt disk number: 1, Duration: 0.21188712120056152, Flag: True
+Block size: 1024, Corrupt disk number: 2, Duration: 0.29541778564453125, Flag: True
+Block size: 4096, Corrupt disk number: 1, Duration: 0.057740211486816406, Flag: True
+Block size: 4096, Corrupt disk number: 2, Duration: 0.11325573921203613, Flag: True
+Block size: 16384, Corrupt disk number: 1, Duration: 0.020998477935791016, Flag: True
+Block size: 16384, Corrupt disk number: 2, Duration: 0.070556640625, Flag: True
+Block size: 65536, Corrupt disk number: 1, Duration: 0.010723590850830078, Flag: True
+Block size: 65536, Corrupt disk number: 2, Duration: 0.05878138542175293, Flag: True
+Block size: 262144, Corrupt disk number: 1, Duration: 0.00811457633972168, Flag: True
+Block size: 262144, Corrupt disk number: 2, Duration: 0.055405378341674805, Flag: True
+Block size: 1048576, Corrupt disk number: 1, Duration: 0.010244369506835938, Flag: True
+Block size: 1048576, Corrupt disk number: 2, Duration: 0.07607769966125488, Flag: True
