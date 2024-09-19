@@ -629,7 +629,6 @@ class RAID6(object):
                     
                     break
         self.stripe2file[stripe_idx] = new_dict
-        print(f"New dict:{new_dict}\n offset_list:{offset_list}")
 
         # Write the stripe data to the disks
         (p_idx, q_idx), data_disk_idxs = self._find_parity_PQ_idx(stripe_idx)
@@ -658,7 +657,8 @@ class RAID6(object):
             data_path: str, the path of the new data
         '''
         if file_name not in self.file2stripe:
-            print(f"File {file_name} does not exist in the RAID6 system")
+            # print(f"File {file_name} does not exist in the RAID6 system")
+            self.logger.error(f"File {file_name} does not exist in the RAID6 system")
             return False
         
         with open(data_path, "rb") as f:
