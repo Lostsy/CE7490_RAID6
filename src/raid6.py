@@ -78,6 +78,18 @@ class RAID6(object):
         self.logger.addHandler(file_handler)
         self.logger.info(f"RAID6 system initialized with {self.data_disks} data disks and {self.parity_disks} parity disks")
 
+    def get_disk_status(self):
+        '''
+        Get the status of the disks in the RAID6 system.
+        '''
+        return self.status
+    
+    def get_disk_num(self):
+        '''
+        Get the number of disks in the RAID6 system.
+        '''
+        return self.stripe_width
+
     def _find_parity_PQ_idx(self, stripe_idx: int):
         '''
         Find the parity disk index for P and Q.
