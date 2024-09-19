@@ -666,17 +666,7 @@ class RAID6(object):
 
         stripe_info = self.file2stripe[file_name]
         self.delete_data(file_name)
-        # Update based on the original data size and the new data size
-        # if data_size >= len(data): 
-        # write the data to the location of current data
-        # The rest part will be set empty
-        # if data_size < len(data):
-        # write the data to the location of current data
-        # the rest part will request for new space
-        # involved_stripe = set()
 
-        # Generate a new stripe_info based on data size
-        # stripe_size = sum(id_size[0][1] for _, id_size in stripe_info.items())
         stripe_data = bytearray(0)
         file2stripe = {}
         for stripe_idx, info in stripe_info.items():
@@ -723,8 +713,7 @@ class RAID6(object):
                 break
         # Update the file2stripe
         self.file2stripe[rewrite_name] = file2stripe
-        print(f"At Here!")
-        print(self.file2stripe)
+
         # If need extra space
         if len(data) > 0:
             stripe2data = self._distribute_data(data, rewrite_name)
@@ -735,9 +724,6 @@ class RAID6(object):
                     self.file2stripe[rewrite_name][key] += stripe2data[key]
             # for stripe_idx, offset_list in stripe2data.items():
             #     involved_stripe.add(stripe_idx)
-        print(f"At Here!!!")
-        print(self.file2stripe)
-        print(self.stripe2file[0])
 
         # Merge the data pieces
         # Update file2stripe
@@ -749,21 +735,6 @@ class RAID6(object):
                 self.stripe2file[idx].pop(point)
             for offset, size in new_offset_list:
                 self.stripe2file[idx][offset] = [rewrite_name, size]
-
-        # Update stripe2file
-        pass
-        # Update stripe_status
-        pass
-                    
-
-        print(f"At Here!!!")
-        print(self.file2stripe[rewrite_name])
-
-
-        # Update the parity blocks
-        # for stripe_idx in involved_stripe:
-        #     self._update_parity_by_stripe_id(stripe_idx)
-
         return True
 
 
