@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from copy import deepcopy
+import logging
 # from clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from src.clib.galois_field import cal_parity_8, cal_parity_p, cal_parity_q_8, cal_parity_q, q_recover_data, recover_data_data
 from src.utils import Disk, RAID6Config
@@ -69,7 +70,14 @@ class RAID6(object):
         # Init idle stripe status
         for i in range(self.stripe_num):
             self.stripe_status.add((self.stripe_size, i)) # ordered list
-    
+
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(logging.INFO)
+        file_handler = logging.FileHandler(os.path.join(self.data_path, "Raid6.log"))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - Func: %(name)s.%(funcName)s - [%(levelname)s] - %(message)s'))
+        self.logger.addHandler(file_handler)
+        self.logger.info(f"RAID6 system initialized with {self.data_disks} data disks and {self.parity_disks} parity disks")
+
     def _find_parity_PQ_idx(self, stripe_idx: int):
         '''
         Find the parity disk index for P and Q.
@@ -141,7 +149,7 @@ class RAID6(object):
         Distribute a stripe of data to the RAID6 system.
         '''
         # Assume the stripe data is less than the left capacity
-        print(f'data size {len(stripe_data)}')
+        self.logger.info(f'Distribute stripe {stripe_idx} with data size {len(stripe_data)}')
 
         # Find the offset to write the stripe data
         left_size = len(stripe_data)
@@ -220,7 +228,8 @@ class RAID6(object):
         
         # Distribute the data to the stripes
         for stripe_idx, stripe_data in stripe2data.items():
-            print(f'Distribute stripe {stripe_idx}')
+            # print(f'Distribute stripe {stripe_idx}')
+            self.logger.info(f'Distribute stripe {stripe_idx}')
             stripe2data[stripe_idx] = self._distribute_stripe(stripe_idx, stripe_data, file_name)
         
         self.left_size -= data_size
@@ -407,7 +416,8 @@ class RAID6(object):
             data = f.read()
         
         self.file2stripe[name] = self._distribute_data(data, name)
-        print(f"Data saved to RAID6 system successfully")
+        # print(f"Data saved to RAID6 system successfully")
+        self.logger.info(f"Data saved to RAID6 system successfully")
     
     def verify_stripe(self, stripe_idx: int, idxs: list=None):
         '''
@@ -446,8 +456,10 @@ class RAID6(object):
             if verify:
                 stripe_status = self.verify_stripe(stripe_idx, [p_idx, q_idx, data_disk_idxs])
                 if stripe_status == ParityCode.ACCURATE:
-                    print(f"Stripe {stripe_idx} is verified.")
+                    # print(f"Stripe {stripe_idx} is verified.")
+                    self.logger.info(f"Stripe {stripe_idx} is verified.")
                 else:
+                    self.logger.error(f"Stripe {stripe_idx} is corrupted.")
                     raise ValueError(f"Stripe {stripe_idx} is corrupted.")
 
             stripe_data_size = sum(size for _, size in offset_list)
@@ -457,7 +469,8 @@ class RAID6(object):
 
         with open(out_path, "wb") as f:
             f.write(data)
-            print(f"Data loaded from RAID6 system successfully")
+            # print(f"Data loaded from RAID6 system successfully")
+            self.logger.info(f"Data loaded from RAID6 system successfully")
     
     def check_disks_status(self):
         '''
@@ -465,7 +478,8 @@ class RAID6(object):
         '''
         for i in range(self.stripe_width):
             flag = self.disks[i].check()
-            print(f"Disk {i} status: {flag}")
+            # print(f"Disk {i} status: {flag}")
+            self.logger.info(f"Disk {i} status: {flag}")
             for j in range(self.stripe_num):
                 self.status[j][i] = flag
             if flag == False:
@@ -486,7 +500,8 @@ class RAID6(object):
             self._recover_stripe(stripe_idx, fail_code, failed_idxs)
             for i in failed_idxs:
                 self.status[stripe_idx][i] = True
-        print(f"Disks recovered successfully")
+        # print(f"Disks recovered successfully")
+        self.logger.info(f"Disks recovered successfully")
 
     def _update_parity_by_stripe_id(self, stripe_idx: int):
         '''
@@ -507,7 +522,8 @@ class RAID6(object):
         Delete data from the RAID6 system.
         '''
         if file_name not in self.file2stripe:
-            print(f"File {file_name} does not exist in the RAID6 system")
+            # print(f"File {file_name} does not exist in the RAID6 system")
+            self.logger.error(f"File {file_name} does not exist in the RAID6 system")
             return False
         
         stripe_info = self.file2stripe[file_name]
@@ -536,7 +552,8 @@ class RAID6(object):
         del self.file2stripe[file_name]
         self.left_size += sum(id_size[0][1] for _, id_size in stripe_info.items())
 
-        print(f"Data {file_name} deleted from RAID6 system successfully")
+        # print(f"Data {file_name} deleted from RAID6 system successfully")
+        self.logger.info(f"Data {file_name} deleted from RAID6 system successfully")
 
     def modify_data(self, file_name: str, data_path: str):
         '''
@@ -585,7 +602,7 @@ class RAID6(object):
 # Example usage
 if __name__ == "__main__":
     # Initialize the RAID6 system
-    config = RAID6Config(data_disks=6, stripe_width=8)
+    config = RAID6Config(data_disks=6)
     print(config)
     raid6 = RAID6(config)
 
