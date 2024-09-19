@@ -531,6 +531,25 @@ class RAID6(object):
             for offset, size in offset_list:
                 # Mark the blocks as empty
                 self.stripe2file[stripe_idx][offset] = [None, size]
+                # Merge the free space
+                # Merge the space ahead
+                new_offset = offset
+                new_size = size
+                for inn_offset, inn_info in self.stripe2file[stripe_idx].items():
+                    inn_name, inn_size = inn_info
+                    if inn_name == None and inn_offset + inn_size == new_offset:
+                        self.stripe2file[stripe_idx][inn_offset] = [None, inn_size + new_size]
+                        self.stripe2file[stripe_idx].pop(offset)
+                        new_offset = inn_offset
+                        new_size += inn_size
+                        break
+                # Merge the space behind
+                for inn_offset, inn_info in self.stripe2file[stripe_idx].items():
+                    inn_name, inn_size = inn_info
+                    if inn_name == None and offset + size == inn_offset:
+                        self.stripe2file[stripe_idx][new_offset] = [None, new_size + inn_size]
+                        self.stripe2file[stripe_idx].pop(inn_offset)
+                        break
                 
                 # Update the stripe status (add the freed space back)
                 for idx, stripe in enumerate(self.stripe_status):
