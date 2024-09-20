@@ -30,9 +30,16 @@ python setup.py build_ext --inplace
 ```
 
 ## Test case
+For fundamental test
 ```
 python test_parity.py
 python test_recover.py
+```
+For other test
+```
 pytest test/test_save_load.py  -log-cli-level=INFO
 pytest test/test_deletion.py -log-cli-level=INFO
+pytest test/test_recover_compare_block_size.py -log-cli-level=INFO
+pytest test/test_recover_compare_file_size.py -log-cli-level=INFO
 ```
+Experiment result are saved in test/exp_results.
