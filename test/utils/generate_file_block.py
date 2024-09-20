@@ -35,3 +35,5 @@ if __name__ == "__main__":
     # Generate a file of 0.125MB
     file_path = os.path.join(tgt_dir, "sample_2E17")
     generate_file(file_path, 128*1024)
+
+    generate_file("data/data.bin", 100*1024*1024)
