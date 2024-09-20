@@ -593,10 +593,8 @@ class RAID6(object):
         storage_dict = self.stripe2file[stripe_idx]
         for offset, size in offset_list:
             for start_offset, (filename, filesize) in storage_dict.items():
-                # 检查是否有任何重叠
                 if start_offset is not None and filename is not None:
                     if (offset < start_offset + filesize) and (start_offset < offset + size):
-                        # 如果有重叠，返回False
                         return False
         return True
 

@@ -53,8 +53,6 @@ def test_recover_data_data(filepath, corrupt_disk_num=1, total_size=64*1024*1024
     for i in range(len(raid6.status)):
         for j in corrupt_id:
             raid6.status[i][j] = False
-    # raid6.check_disks_status()
-    # raid6.check_disks_status()
     start = time.time()
     raid6.recover_disks()
     end = time.time()
